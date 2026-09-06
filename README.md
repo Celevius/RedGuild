@@ -24,7 +24,6 @@ Features to deliver ASAP:
 * Show only online filter option on the alt tracker
 * End of raid reminder to sync (may not be needed if the auction forcesync is added)
 * DKP Row archive (for users away for a long period)
-* (Auc) Reopen bid window option (user)?
 * Full code rebuilt (claude)
 * Conversion to multi lua file version
   
@@ -35,9 +34,7 @@ Outstanding bugs:
 * Request sync doesn't work (check who it choses it from too and when the editors version codes fixed it should pick the highest version)
 * Editors decline force sync not showing/working?
 * Version control on editors tab isn't right and we need that functionality to fix/improve lots of other things
-* (Auc) Multiple rolls are recorded during auctions, needs to just be first and warn user it has only accepted the first roll
-* (Auc) Item swapping during bids doesn't start a new bid (confirmation box to stop accidental ones whilst bidding is ongoing)
-* (Auc) 10 dkp min needs added
+* ML tab not resetting people no longer in the raid/group
 
 Ideas for future releases (significant work):
 * Colour coding in the logs to make them easier to read (and full redesign of log tab tbh)
