@@ -45,6 +45,21 @@ Ideas for future releases (significant work):
 
 -------------------------------------------------------
 
+
+2.1.69 Changelog
+-------------------------------------------------------
+Added features:
+* Reintroduced Pass button
+* Tooltip on item icon
+* SYNCING added for bidding whilst dkp data still being download
+* Resync on lost packages added
+
+Bugs squashed:
+* Syncing to editors fixed
+* Special character names sync issue
+
+
+
 2.0.69 Changelog
 -------------------------------------------------------
 Added features:
