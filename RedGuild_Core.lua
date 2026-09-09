@@ -72,7 +72,7 @@ REDGUILD_Inbound = REDGUILD_Inbound or {
     DATA      = {},
     EDITORSYNC = {},
     FORCE_REQ = {},
-	ALTS       = {},
+	ALTS_DATA  = {},
 }
 
 -- Payloads that already assembled, keyed the same way as the buckets.
@@ -633,14 +633,18 @@ end
         actualTarget = Ambiguate(actualTarget, "none")
     end
 
-	-- Small messages (everything except chunked DKP types)
+	-- Small messages (everything except the chunked types below).
+	-- ALTS_DATA is the alt-tracker snapshot: same as DATA/EDITORSYNC,
+	-- it can exceed one addon message once a guild has enough tracked
+	-- alts, so it needs the same chunk/repair path. ALTS_REQ and
+	-- ALTS_UPDATE stay small - a name and a single field edit never
+	-- get close to the size limit.
 	local isChunked =
 		msgType == "DATA" or
 		msgType == "EDITORSYNC" or
 		msgType == "FORCE_REQ" or
-		msgType == "ALTS"		
+		msgType == "ALTS_DATA"
 
-	-- ALT SYNC MESSAGES ARE ALWAYS SMALL
 	if not isChunked then
 		local msg = string.format("%s:%s:%s", REDGUILD_CHAT_PREFIX, msgType, payload)
 		C_ChatInfo.SendAddonMessage(REDGUILD_CHAT_PREFIX, msg, channel, actualTarget)

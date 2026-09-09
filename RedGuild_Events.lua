@@ -186,7 +186,7 @@ if event == "CHAT_MSG_ADDON" then
         msg:match("^([^:]+):([^:]+):(%d+):(%d+):(%d+):(.*)$")
 
     if pfx2 == REDGUILD_CHAT_PREFIX
-       and (chunkType == "DATA" or chunkType == "EDITORSYNC" or chunkType == "FORCE_REQ" or chunkType == "ALTS")
+       and (chunkType == "DATA" or chunkType == "EDITORSYNC" or chunkType == "FORCE_REQ" or chunkType == "ALTS_DATA")
     then
         local seq   = tonumber(seqStr)
         local part  = tonumber(partStr)
@@ -268,14 +268,22 @@ if event == "CHAT_MSG_ADDON" then
             end
 			
 			-------------------------------------------------
-			-- ALT SNAPSHOT (CHUNKED ALTS_DATA)
+			-- ALT SNAPSHOT
 			-------------------------------------------------
-			if chunkType == "ALTS" then
+			if chunkType == "ALTS_DATA" then
 				local ok, snapshot = pcall(DecodePayload, full)
-				if ok then
-					ApplyAltSnapshot(snapshot)
-					RefreshMainsList()
-					UpdateTopBar()
+				if ok and type(snapshot) == "table" then
+					local incoming = tonumber(snapshot.version or 0)
+					local localVer = tonumber(RedGuild_Config.altsVersion or 0)
+
+					RedGuild_Config.altsVersionByUser = RedGuild_Config.altsVersionByUser or {}
+					RedGuild_Config.altsVersionByUser[NormalizeName(entry.from or sender)] = incoming
+
+					if incoming > localVer then
+						ApplyAltSnapshot(snapshot)
+						RefreshMainsList()
+						UpdateTopBar()
+					end
 				end
 
 				RedGuild_Config.lastAltSync     = date("%Y-%m-%d %H:%M:%S")
@@ -349,13 +357,16 @@ if event == "CHAT_MSG_ADDON" then
     end
 
     ---------------------------------------------------------
-    -- ALT SYNC: SMALL MESSAGES (ALTS_REQ / ALTS_DATA / ALTS_UPDATE)
+    -- ALT SYNC: SMALL MESSAGES (ALTS_REQ / ALTS_UPDATE)
+    -- ALTS_DATA is handled above with DATA/EDITORSYNC/FORCE_REQ - it's
+    -- the alt-tracker snapshot, chunked the same way for the same
+    -- reason (it can exceed one addon message).
     ---------------------------------------------------------
     local pfx3, altType, altPayload =
         msg:match("^([^:]+):([^:]+):(.*)$")
 
     if pfx3 == REDGUILD_CHAT_PREFIX then
-    
+
 		-- ALT SYNC: REQUEST SNAPSHOT
 		if altType == "ALTS_REQ" then
 			local requester = altPayload
@@ -378,26 +389,6 @@ if event == "CHAT_MSG_ADDON" then
 			end
 			return
 		end
-
-        -- ALT SYNC: RECEIVE SNAPSHOT
-		if altType == "ALTS_DATA" then
-			local ok, snapshot = pcall(DecodePayload, altPayload)
-			if ok and type(snapshot) == "table" then
-				local incoming = tonumber(snapshot.version or 0)
-				local localVer = tonumber(RedGuild_Config.altsVersion or 0)
-				
-				RedGuild_Config.altsVersionByUser = RedGuild_Config.altsVersionByUser or {}
-				RedGuild_Config.altsVersionByUser[NormalizeName(sender)] = incoming
-
-				if incoming > localVer then
-					ApplyAltSnapshot(snapshot)
-					RedGuild_Config.altsVersion = incoming
-					RefreshMainsList()
-					UpdateTopBar()
-				end
-			end
-		end
-
 
         -- ALT SYNC: PER-FIELD UPDATE
 		if altType == "ALTS_UPDATE" then
