@@ -343,7 +343,7 @@ function AttemptAutoSync()
         return
     end
 
-    D("Auto-sync → asking " .. tostring(bestEditor) .. " for EDITORREQ + REQUEST")
+    D("Auto-sync → asking " .. tostring(bestEditor) .. " for REQUEST")
 
     local meReal = Ambiguate(me, "short")
 
@@ -351,7 +351,6 @@ function AttemptAutoSync()
     -- than every online editor, so a raid full of people logging in at
     -- once doesn't turn into several editors each whispering back a
     -- full DKP table to the same person at the same time.
-    RedGuild_Send("EDITORREQ", meReal, bestEditor)
-    RedGuild_Send("REQUEST",   meReal, bestEditor)
+    RedGuild_Send("REQUEST", meReal, bestEditor)
 end
 

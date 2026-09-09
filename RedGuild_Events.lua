@@ -23,20 +23,6 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
         EnsureSaved()
         EnsureMinimapConfig()
 
-        -- Normalize authorized editor keys
-		if RedGuild_Config and RedGuild_Config.authorizedEditors then
-			local fixed = {}
-			for name, v in pairs(RedGuild_Config.authorizedEditors) do
-				if type(name) == "string" then
-					local key = NormalizeName(name)
-					if key then
-						fixed[key] = true
-					end
-				end
-			end
-			RedGuild_Config.authorizedEditors = fixed
-		end
-
         -- Populate class data if guild roster is already cached
         PopulateGuildClasses()
 
@@ -78,7 +64,6 @@ if event == "PLAYER_LOGIN" then
 	--C_GuildInfo.GuildRoster()
 
     EnsureSaved()
-    EnsureProtectedEditor()
     RedGuild_UpdateEditorTabVisibility()
 
     -- Version handshake: ask guild addon users for their version
@@ -134,7 +119,6 @@ end
                 local anyName = select(1, GetGuildRosterInfo(1))
                 if anyName then
                     firstRosterReady = true
-                    EnsureProtectedEditor()
                     RedGuild_UpdateEditorTabVisibility()
 					if IsInGuild() and GetNumGuildMembers() > 0 then
 						PopulateGuildClasses()
@@ -182,13 +166,13 @@ if event == "CHAT_MSG_ADDON" then
     RedGuild_Config.addonUsers[key] = true
 
     ---------------------------------------------------------
-    -- CHUNKED MESSAGES (DATA / EDITORSYNC / FORCE_REQ)
+    -- CHUNKED MESSAGES (DATA / FORCE_REQ / ALTS_DATA)
     ---------------------------------------------------------
     local pfx2, chunkType, seqStr, partStr, totalStr, chunk =
         msg:match("^([^:]+):([^:]+):(%d+):(%d+):(%d+):(.*)$")
 
     if pfx2 == REDGUILD_CHAT_PREFIX
-       and (chunkType == "DATA" or chunkType == "EDITORSYNC" or chunkType == "FORCE_REQ" or chunkType == "ALTS_DATA")
+       and (chunkType == "DATA" or chunkType == "FORCE_REQ" or chunkType == "ALTS_DATA")
     then
         local seq   = tonumber(seqStr)
         local part  = tonumber(partStr)
@@ -295,23 +279,6 @@ if event == "CHAT_MSG_ADDON" then
 			end
 
             -------------------------------------------------
-            -- EDITOR LIST SYNC
-            -------------------------------------------------
-            if chunkType == "EDITORSYNC" then
-                local decoded = LibDeflate:DecodeForPrint(full)
-                if not decoded then return end
-                local decompressed = LibDeflate:DecompressDeflate(decoded)
-                if not decompressed then return end
-                local ok, tbl = LibSerialize:Deserialize(decompressed)
-                if not ok or type(tbl) ~= "table" then return end
-                ApplyEditorList(tbl)
-				RedGuild_Config.lastEditorSync = date("%Y-%m-%d %H:%M:%S")
-				RedGuild_Config.lastEditorSyncFrom = sender
-				UpdateSyncStatus()
-                return
-            end
-
-            -------------------------------------------------
             -- FORCE SYNC
             -------------------------------------------------
             if chunkType == "FORCE_REQ" then
@@ -360,7 +327,7 @@ if event == "CHAT_MSG_ADDON" then
 
     ---------------------------------------------------------
     -- ALT SYNC: SMALL MESSAGES (ALTS_REQ / ALTS_UPDATE)
-    -- ALTS_DATA is handled above with DATA/EDITORSYNC/FORCE_REQ - it's
+    -- ALTS_DATA is handled above with DATA/FORCE_REQ - it's
     -- the alt-tracker snapshot, chunked the same way for the same
     -- reason (it can exceed one addon message).
     ---------------------------------------------------------
@@ -412,7 +379,7 @@ if event == "CHAT_MSG_ADDON" then
 	end
 
     ---------------------------------------------------------
-    -- SIMPLE MESSAGES (EDITORREQ / REQUEST / VERSION / FORCE_* etc.)
+    -- SIMPLE MESSAGES (REQUEST / VERSION / FORCE_* etc.)
     ---------------------------------------------------------
     local _, simpleType, simplePayload = msg:match("^([^:]+):([^:]+):?(.*)$")
     if not simpleType then return end
@@ -454,15 +421,6 @@ if event == "CHAT_MSG_ADDON" then
 
         D(string.format("RESEND → %d part(s) of seq %d back to %s",
             sent, seq, tostring(sender)))
-        return
-    end
-
-    -- EDITORREQ: payload = requester name
-    if simpleType == "EDITORREQ" then
-        local requester = simplePayload ~= "" and simplePayload or sender
-        if IsAuthorized() or IsGuildOfficer() then
-            BroadcastEditorListTo(requester)
-        end
         return
     end
 

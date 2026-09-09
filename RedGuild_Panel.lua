@@ -30,12 +30,12 @@ function RealignTabs()
 end
 
 -- The editor-only tabs (Bid Log, RL Tools, Editors, Audit Log) are
--- always created in CreateUI, but a player's own editor status can
--- resolve after that: EnsureProtectedEditor() runs later at login (or
--- only once the guild roster arrives), and an incoming editor-list
--- sync can promote or demote the local player mid-session. Called
--- from all of those points so the tabs show up (or disappear) without
--- needing a UI reload.
+-- always created in CreateUI, but IsEditor() depends on the guild
+-- roster (it looks up the player's own rank), which is often not
+-- populated yet at that exact moment - it can resolve moments later,
+-- once GUILD_ROSTER_UPDATE actually delivers it. Called from every
+-- point that can happen so the tabs show up (or disappear, on a rank
+-- change) without needing a UI reload.
 function RedGuild_UpdateEditorTabVisibility()
     if not tabs[TAB_BIDLOG] then return end   -- CreateUI hasn't run yet
 
@@ -991,101 +991,20 @@ function UpdateAuditLog()
     end
 end
 
---------------------------------------------------------------------
--- BROADCAST EDITOR LIST
---------------------------------------------------------------------
-function BroadcastEditorListTo(target)
-    EnsureConfig()
-
-    if not target or target == "" then
-        D("EDITOR SYNC → No target")
-        return
-    end
-	
-	if not IsActiveGuildMember(target) then
-		D("EDITOR SYNC → target not in guild, skipping")
-		return
-	end
-
-    local payload = {
-        editors = RedGuild_Config.authorizedEditors or {},
-        version = RedGuild_Config.editorListVersion or 0,
-    }
-
-    local serialized  = LibSerialize:Serialize(payload)
-    local compressed  = LibDeflate:CompressDeflate(serialized)
-    local encoded     = LibDeflate:EncodeForPrint(compressed)
-
-    D("EDITOR SYNC → Sending version " .. tostring(payload.version) .. " to " .. tostring(target))
-    RedGuild_Send("EDITORSYNC", encoded, target)
-end
-
---------------------------------------------------------------------
--- APPLY EDITOR LIST (version‑aware, protected, user‑safe)
---------------------------------------------------------------------
-function ApplyEditorList(payload)
-    D("EDITOR SYNC → ApplyEditorList called")
-
-    if type(payload) ~= "table" or type(payload.editors) ~= "table" then
-        D("EDITOR SYNC ERROR: payload invalid")
-        return
-    end
-
-    local incomingEditors = payload.editors
-    local incomingVersion = tonumber(payload.version) or 0
-
-    local localEditors  = RedGuild_Config.authorizedEditors or {}
-    local localVersion  = tonumber(RedGuild_Config.editorListVersion or 0)
-
-    D("EDITOR SYNC → Incoming version=" .. tostring(incomingVersion))
-    D("EDITOR SYNC → Local version=" .. tostring(localVersion))
-
-    ---------------------------------------------------------
-    -- RULE 2: Editors only accept higher‑version lists
-    ---------------------------------------------------------
-    if incomingVersion <= localVersion then
-        D("EDITOR SYNC → Incoming version not newer — ignored")
-        return
-    end
-
-    ---------------------------------------------------------
-    -- RULE 3: Guild leader is protected and cannot be removed
-    ---------------------------------------------------------
-    local protected = RedGuild_Config.protectedEditor
-    if protected then
-        incomingEditors[protected] = true
-    end
-
-    ---------------------------------------------------------
-    -- Apply new list
-    ---------------------------------------------------------
-    local normalized = {}
-	for key, v in pairs(incomingEditors) do
-		local nk = NormalizeName(key)
-		if nk and nk ~= "" then
-			normalized[nk] = true
-		end
-	end
-
-RedGuild_Config.authorizedEditors = normalized
-    RedGuild_Config.editorListVersion = incomingVersion
-
-    D("EDITOR SYNC → Applied new editor list (version " .. incomingVersion .. ")")
-
-    UpdateOnlineEditors()
-    RefreshEditorList()
-    RedGuild_UpdateEditorTabVisibility()
-end
-
+-- Lists the guild's current rank 1 / rank 5 members - editor status
+-- is read straight from the live guild roster, so there is no list to
+-- broadcast or apply anymore.
 function RefreshEditorList()
     if not editorRows then return end
 
-    local protected = RedGuild_Config.protectedEditor
-
-    -- Convert dictionary → array
     local names = {}
-    for name in pairs(RedGuild_Config.authorizedEditors or {}) do
-        table.insert(names, name)
+    if IsInGuild() then
+        for i = 1, GetNumGuildMembers() do
+            local gName, _, rankIndex = GetGuildRosterInfo(i)
+            if gName and (rankIndex == 1 or rankIndex == 5) then
+                table.insert(names, Ambiguate(gName, "short"))
+            end
+        end
     end
     table.sort(names)
 
@@ -1097,26 +1016,13 @@ function RefreshEditorList()
 
         row.name = name
 
-        -- Fetch known version (may be nil)
-        local ver = RedGuild_Config.EditorVersions and RedGuild_Config.EditorVersions[name]
-		
-		-- Normalize for version lookup
         local key = NormalizeName(name)
         local ver = RedGuild_Config.EditorVersions and RedGuild_Config.EditorVersions[key]
-		
-		-- Build display text
-        local display
+
         if ver then
-            display = string.format("%s (v%s)", name, ver)
+            row.text:SetText(string.format("%s (v%s)", name, ver))
         else
-            display = string.format("%s (—)", name)
-        end
-		
-        -- GOLD for protected editor
-        if protected and NormalizeName(name) == NormalizeName(protected) then
-            row.text:SetText("|cffffd700" .. name .. "|r")
-        else
-            row.text:SetText(name)
+            row.text:SetText(string.format("%s (—)", name))
         end
 
         row:Show()
@@ -1127,8 +1033,7 @@ function RefreshEditorList()
     for j = i, #editorRows do
         editorRows[j].name = nil
         editorRows[j].text:SetText("")
-        editorRows[j].highlight:Hide()
         editorRows[j]:Hide()
     end
-end    
+end
 

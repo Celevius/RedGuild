@@ -95,12 +95,6 @@ GameTooltip:AddLine("|cffffff00Alt Tracker Sync|r")
 GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastAltSync or "Never"))
 GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastAltSyncFrom or "?"))
 GameTooltip:AddLine("|cffffffffVersion: |r" .. (RedGuild_Config.altsVersion or "?"))
-GameTooltip:AddLine(" ")
-
--- Editor sync
-GameTooltip:AddLine("|cffffff00Editor Sync|r")
-GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastEditorSync or "Never"))
-GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastEditorSyncFrom or "?"))
 
     GameTooltip:Show()
 end)

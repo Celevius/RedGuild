@@ -18,7 +18,6 @@ REDGUILD_CHAT_PREFIX = "REDGUILD"
 RedGuild_Config.smartSync      		= (RedGuild_Config.smartSync ~= false)
 RedGuild_Config.addonUsers     		= RedGuild_Config.addonUsers     or {}
 RedGuild_Config.onlineEditors  		= RedGuild_Config.onlineEditors  or {}
-RedGuild_Config.authorizedEditors 	= RedGuild_Config.authorizedEditors or {}
 RedGuild_Config.hideMeFromSync 		= RedGuild_Config.hideMeFromSync or false
 RedGuild_Config.EditorVersions 		= RedGuild_Config.EditorVersions or {}
 
@@ -31,8 +30,6 @@ RedGuild_Config.lastDKPSync         = RedGuild_Config.lastDKPSync         or "Ne
 RedGuild_Config.lastDKPSyncFrom     = RedGuild_Config.lastDKPSyncFrom     or "?"
 RedGuild_Config.lastAltSync         = RedGuild_Config.lastAltSync         or "Never"
 RedGuild_Config.lastAltSyncFrom     = RedGuild_Config.lastAltSyncFrom     or "?"
-RedGuild_Config.lastEditorSync      = RedGuild_Config.lastEditorSync      or "Never"
-RedGuild_Config.lastEditorSyncFrom  = RedGuild_Config.lastEditorSyncFrom  or "?"
 
 
 RedGuild_Config.altsVersion = RedGuild_Config.altsVersion or 0
@@ -70,7 +67,6 @@ LibDeflate   = LibStub("LibDeflate")
 -- Ensure inbound chunk buffers exist
 REDGUILD_Inbound = REDGUILD_Inbound or {
     DATA      = {},
-    EDITORSYNC = {},
     FORCE_REQ = {},
 	ALTS_DATA  = {},
 }
@@ -182,11 +178,6 @@ function GetExactName(name)
     -- Ambiguate("none") returns the full, exact name Blizzard expects
     local exact = Ambiguate(name, "none")
     return exact
-end
-
-function ShortName(name)
-    if not name then return nil end
-    return name:match("^[^-]+")
 end
 
 function GenerateAuditID()
@@ -331,25 +322,15 @@ function UpdateSyncStatus()
     local me = UnitName("player")
 
     -- Raw states
-    local dkpState      = GetSyncAgeState(RedGuild_Config.lastDKPSync)
-    local altState      = GetSyncAgeState(RedGuild_Config.lastAltSync)
-    local editorState   = GetSyncAgeState(RedGuild_Config.lastEditorSync)
+    local dkpState = GetSyncAgeState(RedGuild_Config.lastDKPSync)
+    local altState = GetSyncAgeState(RedGuild_Config.lastAltSync)
 
     ----------------------------------------------------------------
-    -- EDITOR-SPECIFIC LOGIC (modify states BEFORE priority system)
+    -- EDITOR-SPECIFIC LOGIC (modify dkpState before the priority system)
     ----------------------------------------------------------------
     if IsEditor(me) then
-        -- Editor Sync is ALWAYS green for editors
-        editorState = "green"
-
         -- DKP Sync only red if NOT highest-version editor
-        local getBest = _G.GetHighestVersionEditor
-		local bestEditor, bestVersion = nil, 0
-
-		if type(getBest) == "function" then
-			bestEditor, bestVersion = getBest()
-		end
-
+        local bestEditor, bestVersion = GetHighestVersionEditor()
         local myVersion = tonumber(RedGuild_Config.dkpVersion or 0)
 
         if myVersion < bestVersion then
@@ -357,22 +338,18 @@ function UpdateSyncStatus()
         else
             dkpState = "green"
         end
-
-    else
-        -- Normal users should IGNORE editor sync entirely
-        editorState = "green"
     end
 
     ----------------------------------------------------------------
     -- PRIORITY SYSTEM
     ----------------------------------------------------------------
 
-    if dkpState == "red" or altState == "red" or editorState == "red" then
+    if dkpState == "red" or altState == "red" then
         statusBox:SetColorTexture(1, 0, 0)
         return
     end
 
-    if dkpState == "orange" or altState == "orange" or editorState == "orange" then
+    if dkpState == "orange" or altState == "orange" then
         statusBox:SetColorTexture(1, 0.65, 0)
         return
     end
@@ -545,33 +522,22 @@ local function RedGuild_GetSyncChannel(msgType, target)
         return "WHISPER", GetExactName(target)
     end
 
-    -- EDITORSYNC is the per-requester editor-list response
-    -- (BroadcastEditorListTo): every call site passes one specific
-    -- target, same bug as DATA above, same fix.
-    if msgType == "EDITORSYNC" then
-        if not target or target == "" then return nil, nil end
-        return "WHISPER", GetExactName(target)
-    end
-
     -- FORCE_REQ is a deliberate one-to-many broadcast (the editor's
     -- manual "Force Sync" action), so it stays guild-wide.
     if msgType == "FORCE_REQ" then
         return "GUILD", nil
     end
 
-    -- REQUEST and EDITORREQ are small (never chunked) so a guild-wide
-    -- send would be cheap on its own, but both callers (the manual
-    -- "Request SYNC" button and AttemptAutoSync) already pick one
-    -- specific bestEditor to ask - broadcasting anyway meant every
-    -- online editor, not just the intended one, whispered back a full
-    -- DKP table or editor list (each now via the DATA/EDITORSYNC fixes
+    -- REQUEST is small (never chunked) so a guild-wide send would be
+    -- cheap on its own, but the manual "Request SYNC" button and
+    -- AttemptAutoSync already pick one specific bestEditor to ask -
+    -- broadcasting anyway meant every online editor, not just the
+    -- intended one, whispered back a full DKP table (via the DATA fix
     -- above), multiplying traffic by the number of online editors for
     -- no reason. Whisper whenever a target was actually given; fall
     -- through to the guild-wide default below for the rare case where
     -- one wasn't (e.g. no bestEditor could be determined yet).
-    if (msgType == "REQUEST" or msgType == "EDITORREQ")
-        and target and target ~= ""
-    then
+    if msgType == "REQUEST" and target and target ~= "" then
         return "WHISPER", GetExactName(target)
     end
 
@@ -583,7 +549,7 @@ local function RedGuild_GetSyncChannel(msgType, target)
 
     -- ALTS_DATA is the alt-tracker snapshot sent to one requester
     -- (only the single highest-version alt holder ever replies, so
-    -- this isn't a fan-out risk like DATA/EDITORSYNC were, but there
+    -- this isn't a fan-out risk like DATA was, but there
     -- is still no reason for the whole guild to receive one person's
     -- answer to another person's request).
     if msgType == "ALTS_DATA" and target and target ~= "" then
@@ -629,14 +595,13 @@ end
     end
 
 	-- Small messages (everything except the chunked types below).
-	-- ALTS_DATA is the alt-tracker snapshot: same as DATA/EDITORSYNC,
-	-- it can exceed one addon message once a guild has enough tracked
-	-- alts, so it needs the same chunk/repair path. ALTS_REQ and
+	-- ALTS_DATA is the alt-tracker snapshot: same as DATA, it can
+	-- exceed one addon message once a guild has enough tracked alts,
+	-- so it needs the same chunk/repair path. ALTS_REQ and
 	-- ALTS_UPDATE stay small - a name and a single field edit never
 	-- get close to the size limit.
 	local isChunked =
 		msgType == "DATA" or
-		msgType == "EDITORSYNC" or
 		msgType == "FORCE_REQ" or
 		msgType == "ALTS_DATA"
 
@@ -646,7 +611,7 @@ end
 		return
 	end
 
-    -- Chunked messages (DATA, EDITORSYNC, FORCE_REQ)
+    -- Chunked messages (DATA, FORCE_REQ, ALTS_DATA)
     RedGuild_OutboundSeq = RedGuild_OutboundSeq + 1
     local seq = RedGuild_OutboundSeq
 
@@ -681,23 +646,10 @@ end
 -- Basic Helpers
 --------------------------------------------------
 
+-- No-op: used to seed the old fixed editor list, which editor status
+-- no longer depends on (it's derived live from guild rank). Kept as a
+-- harmless call target rather than touching its many call sites.
 function EnsureSaved()
-    RedGuild_Config.authorizedEditors = RedGuild_Config.authorizedEditors or {}
-end
-
-function EnsureConfig()
-    RedGuild_Config = RedGuild_Config or {}
-
-    RedGuild_Config.authorizedEditors = RedGuild_Config.authorizedEditors or {}
-    RedGuild_Config.editorListVersion = RedGuild_Config.editorListVersion or 0
-
-    -- Guild leader protection
-    if not RedGuild_Config.protectedEditor then
-        local gm = GetGuildMaster()
-        if gm then
-            RedGuild_Config.protectedEditor = NormalizeName(gm)
-        end
-    end
 end
 
 function EnsurePlayer(name)
@@ -855,19 +807,6 @@ function IsGuildOfficer()
     return rankIndex == 0
 end
 
-local function GetGuildLeader()
-    if not IsInGuild() then return nil end
-
-    for i = 1, GetNumGuildMembers() do
-        local name, _, rankIndex = GetGuildRosterInfo(i)
-        if name and rankIndex == 0 then
-            return Ambiguate(name, "short")
-        end
-    end
-
-    return nil
-end
-
 function RecalcBalance(d)
     d.balance = (d.lastWeek or 0)
               + (d.onTime or 0)
@@ -946,7 +885,7 @@ end
 --------------------------------------------------
 -- Inbound chunk buffer maintenance
 --------------------------------------------------
--- A chunked sync (DATA / FORCE_REQ / EDITORSYNC / ALTS) is only
+-- A chunked sync (DATA / FORCE_REQ / ALTS_DATA) is only
 -- applied once every part has arrived. If a part is lost - a
 -- loading screen mid raid, a server side addon message drop - the
 -- half filled bucket used to sit here untouched forever, so the
@@ -1071,7 +1010,7 @@ function RedGuild_SweepInboundChunks()
                     -- The auto-resync below only re-requests the DKP
                     -- DATA sync, so it needs specifically the sender of
                     -- the dropped DATA transfer, not just whichever
-                    -- bucket (DATA/EDITORSYNC/FORCE_REQ/ALTS) happened
+                    -- bucket (DATA/FORCE_REQ/ALTS_DATA) happened
                     -- to be discarded last.
                     if chunkType == "DATA" then
                         dataFrom = entry.from or dataFrom
@@ -1111,24 +1050,13 @@ end
 
 
 function IsAuthorized()
-    EnsureSaved()
-
-D(string.format(
-    "AUTH CHECK → player='%s' norm='%s' authorized=%s",
-    tostring(UnitName("player")),
-    tostring(NormalizeName(UnitName("player"))),
-    tostring(RedGuild_Config.authorizedEditors[NormalizeName(UnitName("player"))])
-))
-
-    local player = NormalizeName(UnitName("player"))
-    if not player then return false end
-
-    local editors = RedGuild_Config.authorizedEditors
-    if not editors then return false end
-
-    return editors[player] and true or false
+    return IsEditor(UnitName("player"))
 end
 
+-- Editor status is derived entirely from the player's current guild
+-- rank - ranks 1 and 5 - rather than a manually maintained list, so
+-- it needs no sync protocol: everyone already sees the same guild
+-- roster natively.
 function IsEditor(name)
     if not name then
         name = UnitName("player")
@@ -1137,8 +1065,16 @@ function IsEditor(name)
     local key = NormalizeName(name)
     if not key then return false end
 
-    return RedGuild_Config.authorizedEditors
-        and RedGuild_Config.authorizedEditors[key] == true
+    if not IsInGuild() then return false end
+
+    for i = 1, GetNumGuildMembers() do
+        local gName, _, rankIndex = GetGuildRosterInfo(i)
+        if gName and NormalizeName(Ambiguate(gName, "short")) == key then
+            return rankIndex == 1 or rankIndex == 5
+        end
+    end
+
+    return false
 end
 
 function LogAudit(player, field, old, new)
@@ -1146,10 +1082,8 @@ function LogAudit(player, field, old, new)
         return
     end
 
-    if RedGuild_Config.authorizedEditors and next(RedGuild_Config.authorizedEditors) then
-        if not IsEditor(UnitName("player")) then
-            return
-        end
+    if not IsEditor(UnitName("player")) then
+        return
     end
 
     table.insert(RedGuild_Audit, {
@@ -1362,23 +1296,6 @@ local function ClearOfflineAddonUsers()
     end
 end
 
-function EnsureProtectedEditor()
-    RedGuild_Config.authorizedEditors = RedGuild_Config.authorizedEditors or {}
-
-    -- Try to get the real guild leader
-    local guildLeader = ShortName(GetGuildLeader())
-    if guildLeader then
-        local key = NormalizeName(guildLeader)
-        if key then
-            RedGuild_Config.authorizedEditors[key] = true
-            RedGuild_Config.protectedEditor = key
-        end
-        return
-    end
-
-    -- If guild leader cannot be determined, DO NOTHING.
-    -- Do NOT auto-add anyone else.
-end
 
 function GetHighestVersionEditor()
     local bestEditor = nil
@@ -1436,18 +1353,8 @@ function UpdateOnlineEditors()
             local real = Ambiguate(name, "short")
             local key  = NormalizeName(real)
 
-            local hasList = next(RedGuild_Config.authorizedEditors) ~= nil
-
-            -- If user has no editor list yet, treat ALL guild officers as editors
-            local isEditor
-            if hasList then
-                isEditor = RedGuild_Config.authorizedEditors[key]
-            else
-                -- Bootstrap mode: treat officers as editors
-                isEditor = (rankIndex <= 2)   -- 0 = GM, 1 = lunatics, 2 = warmaster
-            end
-
-            if isEditor and online then
+            -- Ranks 1 and 5 are editors.
+            if (rankIndex == 1 or rankIndex == 5) and online then
                 RedGuild_Config.onlineEditors[key] = {
                     name = real,
                     rankIndex = rankIndex
