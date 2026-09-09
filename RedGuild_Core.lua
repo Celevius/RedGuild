@@ -1030,19 +1030,23 @@ function RedGuild_SweepInboundChunks()
             SafeSetSyncWarning(string.format(
                 "Incomplete sync from %s - requesting a fresh sync.",
                 tostring(lastFrom)))
-            Print(string.format(
-                "|cffff8800Incomplete sync|r from %s - %d transfer%s could not be "
-                .. "repaired. Requesting a fresh sync automatically; no action needed.",
-                tostring(lastFrom), dropped, dropped == 1 and "" or "s"))
+            if RedGuild_Debug then
+                Print(string.format(
+                    "|cffff8800Incomplete sync|r from %s - %d transfer%s could not be "
+                    .. "repaired. Requesting a fresh sync automatically; no action needed.",
+                    tostring(lastFrom), dropped, dropped == 1 and "" or "s"))
+            end
         else
             SafeSetSyncWarning(string.format(
                 "Incomplete sync from %s - press Request SYNC.",
                 tostring(lastFrom)))
-            Print(string.format(
-                "|cffff8800Incomplete sync|r from %s - %d transfer%s lost parts and "
-                .. "were discarded. Your DKP table may be out of date; press "
-                .. "Request SYNC on the DKP tab.",
-                tostring(lastFrom), dropped, dropped == 1 and "" or "s"))
+            if RedGuild_Debug then
+                Print(string.format(
+                    "|cffff8800Incomplete sync|r from %s - %d transfer%s lost parts and "
+                    .. "were discarded. Your DKP table may be out of date; press "
+                    .. "Request SYNC on the DKP tab.",
+                    tostring(lastFrom), dropped, dropped == 1 and "" or "s"))
+            end
         end
     end
 end
