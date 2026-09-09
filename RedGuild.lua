@@ -11,7 +11,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 local addonName      = ...
-local REDGUILD_VERSION = "2.1.69"
+local REDGUILD_VERSION = "2.2.69"
 
 local REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -7401,6 +7401,16 @@ end
 --     !pass          pass on the item
 --     !dkp           check balance
 -- The editor sees every bid and awards the item MANUALLY.
+--
+-- Two shapes of auction beyond the plain one:
+--   * COPIES - the same item dropped more than once (two tier tokens
+--     off one boss). One auction is posted for all of them, everybody
+--     sees "2x <item>", and the editor awards it once per copy. The
+--     book is kept between awards, and a winner is flagged so they
+--     cannot be handed a second copy by accident.
+--   * ROLL ONLY - recipes and the like, where DKP is not spent at all.
+--     The bid box is not even offered, whispered bids are taken as
+--     roll declarations, and the award always costs 0 DKP.
 --==================================================================
 
 local AUCTION_DEFAULT_DURATION = 30
@@ -7425,6 +7435,9 @@ RedGuild_Auction = {
     ml         = nil,     -- auctioneer (short name)
     duration   = AUCTION_DEFAULT_DURATION,
     endTime    = nil,
+    qty        = 1,       -- copies of the item up in this auction
+    awarded    = 0,       -- copies already handed out
+    rollOnly   = false,   -- roll-only item: no DKP bids at all
     paused     = false,
     myBid      = nil,     -- what this client submitted, for the log
     remaining  = nil,   -- seconds frozen on the clock while paused
@@ -7465,7 +7478,7 @@ end
 
 -- Snapshot of the current auction, from the point of view of
 -- whoever is running this client.
-local function BuildLogEntry(winner, cost, mode, cancelled)
+local function BuildLogEntry(winner, cost, mode, cancelled, copy)
     local bids = {}
 
     if RedGuild_Auction_IsAuctioneer() then
@@ -7476,6 +7489,9 @@ local function BuildLogEntry(winner, cost, mode, cancelled)
                 mode   = b.mode,
                 roll   = b.roll,
                 src    = b.src,
+                -- Set on a multi-copy item once this bidder has taken
+                -- one, so the detail pane can say so.
+                won    = b.won or nil,
             })
         end
     elseif RedGuild_Auction.myBid then
@@ -7491,6 +7507,12 @@ local function BuildLogEntry(winner, cost, mode, cancelled)
         cost      = cost or 0,
         mode      = mode,
         cancelled = cancelled or nil,
+        -- A multi-copy item writes one entry per copy, so each row can
+        -- say which of them it was.
+        qty       = ((tonumber(RedGuild_Auction.qty) or 1) > 1)
+                    and (tonumber(RedGuild_Auction.qty) or 1) or nil,
+        copy      = copy,
+        rollOnly  = RedGuild_Auction.rollOnly or nil,
         full      = RedGuild_Auction_IsAuctioneer() or nil,
         bids      = bids,
     }
@@ -7570,6 +7592,28 @@ end
 function RedGuild_Auction_IsAuctioneer()
     if not RedGuild_Auction.ml then return false end
     return NormalizeName(RedGuild_Auction.ml) == NormalizeName(UnitName("player"))
+end
+
+-- "2x [Item]" while more than one copy is up, the plain link
+-- otherwise. Used everywhere the item is named so the raid always
+-- sees how many are going out.
+function RedGuild_Auction_ItemLabel()
+    local link = RedGuild_Auction.itemLink or "the item"
+    local qty  = tonumber(RedGuild_Auction.qty) or 1
+    if qty > 1 then
+        return string.format("%dx %s", qty, link)
+    end
+    return link
+end
+
+-- Copies still to hand out on the item that is posted.
+function RedGuild_Auction_Remaining()
+    local qty = tonumber(RedGuild_Auction.qty) or 1
+    return math.max(0, qty - (RedGuild_Auction.awarded or 0))
+end
+
+function RedGuild_Auction_IsRollOnly()
+    return RedGuild_Auction.rollOnly == true
 end
 
 local function AuctionChannel()
@@ -7724,9 +7768,16 @@ function RedGuild_Auction_PushSync(reason)
     return true
 end
 
+-- Wipes the book and everything that describes the item that was up.
+-- Start and BID_START both call this before setting the new item's
+-- copy count and roll-only flag, so a fresh auction never inherits
+-- them from the last one.
 local function AuctionResetBook()
     RedGuild_Auction.bids     = {}
     RedGuild_Auction.selected = nil
+    RedGuild_Auction.awarded  = 0
+    RedGuild_Auction.qty      = 1
+    RedGuild_Auction.rollOnly = false
 end
 
 -- Sorted view of the bid book: main-spec bids by DKP desc, then
@@ -7740,6 +7791,11 @@ function RedGuild_Auction_SortedBids()
 
     local rank = { MS = 1, OS = 2, PASS = 3 }
     table.sort(list, function(a, b)
+        -- On a multi-copy item, whoever already took one sits at the
+        -- top of the list, clear of the bidders still in the running.
+        local wa, wb = a.won and 0 or 1, b.won and 0 or 1
+        if wa ~= wb then return wa < wb end
+
         local ra, rb = rank[a.mode] or 9, rank[b.mode] or 9
         if ra ~= rb then return ra < rb end
         if a.mode == "OS" and b.mode == "OS" then
@@ -7773,6 +7829,11 @@ function RedGuild_Auction_RecordBid(player, amount, mode, src, roll)
     mode   = mode or "MS"
     amount = tonumber(amount) or 0
 
+    -- A roll-only item has no DKP side at all, so a main-spec bid that
+    -- slips through is taken as a roll rather than thrown away. Every
+    -- caller explains this to whoever sent it.
+    if RedGuild_Auction.rollOnly and mode == "MS" then mode = "OS" end
+
     -- Off spec is decided purely by the roll and costs nothing, so
     -- neither off spec nor a pass ever carries a DKP amount.
     if mode ~= "MS" then amount = 0 end
@@ -7788,6 +7849,13 @@ function RedGuild_Auction_RecordBid(player, amount, mode, src, roll)
     end
 
     local existing = RedGuild_Auction.bids[who]
+
+    -- Somebody who already took a copy of a multi-copy item is out of
+    -- the running for the rest, and their award record must not be
+    -- overwritten by a later bid.
+    if existing and existing.won then
+        return false, "You already received a copy of this item."
+    end
 
     -- Keep a previous roll only if the bidder has not switched
     -- between main-spec and off-spec since rolling.
@@ -7819,7 +7887,7 @@ end
 --------------------------------------------------
 
 -- Loads an item into the slot. Never starts an auction.
-function RedGuild_Auction_ApplyItem(link)
+function RedGuild_Auction_ApplyItem(link, qty)
     if not link then return end
     local name, itemLink, _, _, _, _, _, _, _, icon = GetItemInfo(link)
     itemLink = itemLink or link
@@ -7828,6 +7896,12 @@ function RedGuild_Auction_ApplyItem(link)
     RedGuild_Auction.itemID   = tonumber(itemLink:match("item:(%d+)"))
 
     if auctionMaster then
+        -- The loot window knows when the same item is sitting in more
+        -- than one slot, so the copy count is pre-filled from there.
+        -- It is only a suggestion; the editor can still change it.
+        if qty and auctionMaster.qtyBox then
+            auctionMaster.qtyBox:SetText(tostring(math.max(1, tonumber(qty) or 1)))
+        end
         auctionMaster.itemText:SetText(itemLink)
         auctionMaster.itemIcon:SetTexture(icon or (RedGuild_Auction.itemID and GetItemIcon(RedGuild_Auction.itemID)) or "Interface\\Icons\\INV_Misc_QuestionMark")
     end
@@ -7837,16 +7911,17 @@ end
 -- shift-click hook. While an item is already posted, swapping is
 -- confirmed first so a stray drag cannot silently replace the item
 -- the raid is bidding on. Swapping never starts a new auction.
-function RedGuild_Auction_SetItem(link)
+function RedGuild_Auction_SetItem(link, qty)
     if not link then return end
 
     if RedGuild_Auction.posted then
-        RedGuild_Auction.pendingSwap = link
+        RedGuild_Auction.pendingSwap    = link
+        RedGuild_Auction.pendingSwapQty = qty
         StaticPopup_Show("REDGUILD_BID_SWAP_ITEM")
         return
     end
 
-    RedGuild_Auction_ApplyItem(link)
+    RedGuild_Auction_ApplyItem(link, qty)
 end
 
 StaticPopupDialogs["REDGUILD_BID_SWAP_ITEM"] = {
@@ -7855,12 +7930,15 @@ StaticPopupDialogs["REDGUILD_BID_SWAP_ITEM"] = {
     button2 = "Keep bidding",
     OnAccept = function()
         local link = RedGuild_Auction.pendingSwap
-        RedGuild_Auction.pendingSwap = nil
+        local qty  = RedGuild_Auction.pendingSwapQty
+        RedGuild_Auction.pendingSwap    = nil
+        RedGuild_Auction.pendingSwapQty = nil
         RedGuild_Auction_Cancel()
-        if link then RedGuild_Auction_ApplyItem(link) end
+        if link then RedGuild_Auction_ApplyItem(link, qty) end
     end,
     OnCancel = function()
-        RedGuild_Auction.pendingSwap = nil
+        RedGuild_Auction.pendingSwap    = nil
+        RedGuild_Auction.pendingSwapQty = nil
     end,
     timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
 }
@@ -7883,8 +7961,10 @@ local function AuctionStartTicker()
         local left = math.ceil((RedGuild_Auction.endTime or 0) - GetTime())
 
         if left == 30 or left == 20 or left == 10 or left == 5 then
-            AuctionWarn(string.format("%d seconds left to bid on %s",
-                left, RedGuild_Auction.itemLink or "the item"))
+            AuctionWarn(string.format("%d seconds left %s %s",
+                left,
+                RedGuild_Auction.rollOnly and "to roll on" or "to bid on",
+                RedGuild_Auction_ItemLabel()))
         end
 
         if left <= 0 then
@@ -7923,6 +8003,23 @@ function RedGuild_Auction_Start()
     if dur < 5   then dur = 5   end
     if dur > 300 then dur = 300 end
 
+    -- How many of this item are going out. Two tier tokens off one
+    -- boss are a single auction with two winners, not two auctions:
+    -- everybody bids once and the editor awards twice.
+    local qty = 1
+    if auctionMaster and auctionMaster.qtyBox then
+        qty = tonumber(auctionMaster.qtyBox:GetText()) or 1
+    end
+    if qty < 1  then qty = 1  end
+    if qty > 40 then qty = 40 end
+
+    -- Roll-only items (recipes, patterns) are decided purely on the
+    -- roll and never touch DKP, so the bid box is never even offered.
+    local rollOnly = false
+    if auctionMaster and auctionMaster.rollOnlyCheck then
+        rollOnly = auctionMaster.rollOnlyCheck:GetChecked() and true or false
+    end
+
     -- Everyone has to be looking at their real balance before the
     -- prompt appears, so the DKP push goes first and BID_START waits
     -- behind it in the same outbound queue. Sending the announcement
@@ -7930,9 +8027,16 @@ function RedGuild_Auction_Start()
     -- was still streaming, and bidders saw an old balance - or had a
     -- bid rejected against one.
     RedGuild_Auction.preparing = true
-    local pushed = RedGuild_Auction_PushSync("auction start")
-    if pushed then
-        AuctionPrint("Syncing DKP - bidding opens once everyone has it.")
+
+    -- Nothing is bid and nothing is charged on a roll-only item, so
+    -- there is no balance to be stale and no reason to make the raid
+    -- wait on a DKP push: it opens straight away.
+    local pushed = false
+    if not rollOnly then
+        pushed = RedGuild_Auction_PushSync("auction start")
+        if pushed then
+            AuctionPrint("Syncing DKP - bidding opens once everyone has it.")
+        end
     end
 
     RedGuild_AfterOutbound(AUCTION_SYNC_WAIT_MAX, function()
@@ -7955,7 +8059,13 @@ function RedGuild_Auction_Start()
         RedGuild_Auction.myBid    = nil
         RedGuild_Auction.open     = true
         RedGuild_Auction.posted   = true
-        RedGuild_Auction.dkpVersion = tonumber(RedGuild_Config.dkpVersion or 0) or 0
+        RedGuild_Auction.qty      = qty
+        RedGuild_Auction.awarded  = 0
+        RedGuild_Auction.rollOnly = rollOnly
+        -- A roll-only item is not bid against any balance, so there is
+        -- no version to be behind and the prompt never shows "syncing".
+        RedGuild_Auction.dkpVersion = rollOnly and 0
+            or (tonumber(RedGuild_Config.dkpVersion or 0) or 0)
         RedGuild_Auction.syncReqs   = {}
 
         RedGuild_Send("BID_START", EncodePayload({
@@ -7964,16 +8074,33 @@ function RedGuild_Auction_Start()
             itemID     = RedGuild_Auction.itemID,
             ml         = RedGuild_Auction.ml,
             duration   = dur,
+            qty        = qty,
+            rollOnly   = rollOnly or nil,
             -- Lets a client that still missed the push notice it is
             -- behind instead of bidding against a stale number.
             dkpVersion = RedGuild_Auction.dkpVersion,
         }))
 
-        AuctionWarn(string.format(
-            "Bidding OPEN on %s - %d seconds.", RedGuild_Auction.itemLink, dur))
-        AuctionAnnounce(string.format(
-            "No addon? Whisper %s:  !bid <amount>  for main spec,  or just /roll 69 for off spec.  !pass to skip.",
-            RedGuild_Auction.ml))
+        if rollOnly then
+            AuctionWarn(string.format(
+                "ROLL ONLY on %s - %d seconds. /roll 69, no DKP is charged.",
+                RedGuild_Auction_ItemLabel(), dur))
+            AuctionAnnounce(string.format(
+                "No addon? Just /roll 69 - or whisper %s !os. There are no DKP bids on this one.",
+                RedGuild_Auction.ml))
+        else
+            AuctionWarn(string.format(
+                "Bidding OPEN on %s - %d seconds.", RedGuild_Auction_ItemLabel(), dur))
+            AuctionAnnounce(string.format(
+                "No addon? Whisper %s:  !bid <amount>  for main spec,  or just /roll 69 for off spec.  !pass to skip.",
+                RedGuild_Auction.ml))
+        end
+
+        if qty > 1 then
+            AuctionWarn(string.format(
+                "%d copies are up - %d of you will be awarded one each. Bid once.",
+                qty, qty))
+        end
 
         -- The auctioneer never receives their own BID_START, so open
         -- the prompt for them directly. They bid on the same terms as
@@ -8057,10 +8184,13 @@ function RedGuild_Auction_Stop(auto)
             if b.mode ~= "PASS" then count = count + 1 end
         end
 
+        local left = RedGuild_Auction_Remaining()
         AuctionWarn(string.format(
-            "Bidding CLOSED on %s. %d bid%s received. Late bids are still accepted (and flagged LATE) until it is awarded.",
-            RedGuild_Auction.itemLink or "the item",
-            count, count == 1 and "" or "s"))
+            "Bidding CLOSED on %s. %d bid%s received.%s Late bids are still accepted (and flagged LATE) until it is awarded.",
+            RedGuild_Auction_ItemLabel(),
+            count, count == 1 and "" or "s",
+            ((tonumber(RedGuild_Auction.qty) or 1) > 1)
+                and string.format(" %d copies still to award.", left) or ""))
     end
 
     RedGuild_Auction_RefreshMaster()
@@ -8116,10 +8246,17 @@ function RedGuild_Auction_Reopen()
     }))
 
     AuctionWarn(string.format(
-        "Bidding REOPENED on %s - %d seconds. Existing bids are kept.",
-        RedGuild_Auction.itemLink or "the item", dur))
+        "%s REOPENED on %s - %d seconds. Existing bids are kept.%s",
+        RedGuild_Auction.rollOnly and "Rolling" or "Bidding",
+        RedGuild_Auction_ItemLabel(), dur,
+        ((tonumber(RedGuild_Auction.qty) or 1) > 1)
+            and string.format(" %d copies left.", RedGuild_Auction_Remaining()) or ""))
 
-    RedGuild_Auction_PushSync("auction reopen")
+    -- Same reasoning as on Start: nothing is charged on a roll-only
+    -- item, so there is no table worth pushing for it.
+    if not RedGuild_Auction.rollOnly then
+        RedGuild_Auction_PushSync("auction reopen")
+    end
 
     -- The auctioneer never receives their own BID_REOPEN, so refresh
     -- their own prompt directly, same as on a fresh Start.
@@ -8140,7 +8277,7 @@ function RedGuild_Auction_Cancel()
         RedGuild_Send("BID_CANCEL", EncodePayload({ id = RedGuild_Auction.id }))
         AuctionWarn(string.format(
             "Bidding CANCELLED on %s. No DKP has been charged.",
-            RedGuild_Auction.itemLink or "the item"))
+            RedGuild_Auction_ItemLabel()))
     end
 
     if RedGuild_Auction.ticker then
@@ -8160,6 +8297,11 @@ function RedGuild_Auction_Cancel()
 end
 
 -- Manual award. Nothing here picks a winner automatically.
+--
+-- An item posted with more than one copy stays posted after an award:
+-- the book keeps every other bid, the winner is flagged so they cannot
+-- be handed a second copy, and the auction only closes for good once
+-- the last copy has gone out.
 function RedGuild_Auction_Award(winner, cost)
     if not IsAuthorized() then
         AuctionPrint("Only editors can award items.")
@@ -8169,12 +8311,25 @@ function RedGuild_Auction_Award(winner, cost)
         AuctionPrint("Select a bidder in the list first.")
         return
     end
+    if not RedGuild_Auction.posted then
+        AuctionPrint("No item is posted.")
+        return
+    end
 
     cost = tonumber(cost) or 0
     if cost < 0 then cost = 0 end
+    -- A roll-only item never costs DKP, whatever is in the cost box.
+    if RedGuild_Auction.rollOnly then cost = 0 end
 
     local who  = RedGuild_Auction_Bidder(winner)
     local link = RedGuild_Auction.itemLink or "item"
+
+    local held = RedGuild_Auction.bids[who]
+    if held and held.won then
+        AuctionPrint(string.format(
+            "%s already has a copy of this item. Pick somebody else.", who))
+        return
+    end
 
     if cost > 0 then
         local inGuild = IsNameInGuild(who)
@@ -8202,27 +8357,71 @@ function RedGuild_Auction_Award(winner, cost)
     local mode = bid and bid.mode or "MS"
     local roll = bid and bid.roll
 
-    RedGuild_BidLog_Add(BuildLogEntry(who, cost, mode, false))
+    local copies  = tonumber(RedGuild_Auction.qty) or 1
+    RedGuild_Auction.awarded = (RedGuild_Auction.awarded or 0) + 1
+    local copyIdx = math.min(RedGuild_Auction.awarded, copies)
+    local left    = math.max(0, copies - RedGuild_Auction.awarded)
+
+    -- Flagged rather than removed from the book, so the editor keeps
+    -- seeing who took which copy for as long as the auction runs.
+    if bid then
+        bid.won     = true
+        bid.wonCost = cost
+        bid.wonCopy = copyIdx
+    end
+
+    RedGuild_BidLog_Add(BuildLogEntry(
+        who, cost, mode, false, (copies > 1) and copyIdx or nil))
 
     RedGuild_Send("BID_AWARD", EncodePayload({
-        id     = RedGuild_Auction.id,
-        winner = who,
-        cost   = cost,
-        mode   = mode,
+        id        = RedGuild_Auction.id,
+        winner    = who,
+        cost      = cost,
+        mode      = mode,
+        copy      = copyIdx,
+        qty       = copies,
+        -- Copies still to come. Everyone else uses this to decide
+        -- whether the auction is over or simply between winners.
+        remaining = left,
     }))
+
+    local suffix = (copies > 1)
+        and string.format(" (%d of %d)", copyIdx, copies) or ""
 
     if mode == "OS" then
         if roll then
             AuctionWarn(string.format(
-                "%s awarded to %s on an off-spec roll of %d. No DKP charged.", link, winner, roll))
+                "%s%s awarded to %s on %s roll of %d. No DKP charged.",
+                link, suffix, winner,
+                RedGuild_Auction.rollOnly and "a" or "an off-spec", roll))
         else
             AuctionWarn(string.format(
-                "%s awarded to %s for off spec. No DKP charged.", link, winner))
+                "%s%s awarded to %s. No DKP charged.", link, suffix, winner))
         end
     elseif cost > 0 then
-        AuctionWarn(string.format("%s awarded to %s for %d DKP (main spec).", link, winner, cost))
+        AuctionWarn(string.format("%s%s awarded to %s for %d DKP (main spec).",
+            link, suffix, winner, cost))
     else
-        AuctionWarn(string.format("%s awarded to %s. No DKP charged.", link, winner))
+        AuctionWarn(string.format("%s%s awarded to %s. No DKP charged.",
+            link, suffix, winner))
+    end
+
+    RedGuild_Auction.selected = nil
+    if auctionMaster and auctionMaster.costBox then
+        auctionMaster.costBox:SetText("")
+    end
+
+    -- Still copies to go: the auction is left exactly as it stands,
+    -- timer included. Every remaining bid keeps counting, and a clock
+    -- that is still running is not cut short by an early award.
+    if left > 0 then
+        AuctionWarn(string.format(
+            "%d of %d copies of %s still to award.", left, copies, link))
+        RedGuild_Auction_RefreshMaster()
+        AuctionPrint(string.format(
+            "Awarded copy %d of %d to %s for %d DKP. %d left - pick the next winner.",
+            copyIdx, copies, winner, cost, left))
+        return
     end
 
     if RedGuild_Auction.ticker then
@@ -8260,6 +8459,13 @@ function RedGuild_Auction_SendBid(amount, mode)
     mode   = mode or "MS"
     amount = tonumber(amount) or 0
     if mode ~= "MS" then amount = 0 end
+
+    -- Nothing to bid on a roll-only item: the window does not offer a
+    -- bid box, so this only fires from a stale prompt or a macro.
+    if RedGuild_Auction.rollOnly and mode == "MS" then
+        AuctionPrint("This item is roll only - use Roll, it costs no DKP.")
+        return
+    end
 
     local bal = RedGuild_Auction_GetBalance(UnitName("player"))
 
@@ -8308,7 +8514,9 @@ function RedGuild_Auction_SendBid(amount, mode)
         -- on the editor's client and attached to this bid.
         RandomRoll(1, 69)
         if late then
-            AuctionPrint("Bidding has closed - your off-spec roll was sent as LATE and may not be considered.")
+            AuctionPrint("Bidding has closed - your roll was sent as LATE and may not be considered.")
+        elseif RedGuild_Auction.rollOnly then
+            AuctionPrint("Roll sent. This item costs no DKP.")
         else
             AuctionPrint("Off spec roll sent. It costs no DKP if you win it.")
         end
@@ -8356,6 +8564,9 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
         RedGuild_Auction.posted   = true
         RedGuild_Auction.dkpVersion = tonumber(data.dkpVersion or 0) or 0
         AuctionResetBook()
+        -- Set after the reset, which clears the award counter.
+        RedGuild_Auction.qty      = math.max(1, tonumber(data.qty) or 1)
+        RedGuild_Auction.rollOnly = data.rollOnly and true or false
 
         RedGuild_Auction_ShowPrompt()
 
@@ -8482,24 +8693,41 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
     if msgType == "BID_AWARD" then
         if data.id ~= RedGuild_Auction.id then return end
 
+        local cost      = tonumber(data.cost) or 0
+        local copies    = math.max(1, tonumber(data.qty) or 1)
+        local remaining = tonumber(data.remaining) or 0
+
         RedGuild_BidLog_Add(BuildLogEntry(
-            data.winner, tonumber(data.cost) or 0, data.mode, false))
+            data.winner, cost, data.mode, false,
+            (copies > 1) and tonumber(data.copy) or nil))
+
+        -- Non-editors update their own copy so their displayed balance
+        -- is right immediately instead of waiting for the next sync.
+        if not IsAuthorized() and data.winner and cost > 0 then
+            local d = RedGuild_Data and RedGuild_Data[data.winner]
+            if d then
+                d.spent = (d.spent or 0) + cost
+                RecalcBalance(d)
+                if UpdateTable then UpdateTable() end
+            end
+        end
+
+        -- Another copy of the same item is still going out, so the
+        -- auction is not over: every bid already placed still counts
+        -- for it and nothing here is torn down.
+        if remaining > 0 then
+            RedGuild_Auction.awarded = tonumber(data.copy)
+                or ((RedGuild_Auction.awarded or 0) + 1)
+            local b = data.winner and RedGuild_Auction.bids[data.winner]
+            if b then b.won = true end
+            return
+        end
+
         RedGuild_Auction.open   = false
         RedGuild_Auction.posted = false
         AuctionResetBook()
         if auctionPrompt then auctionPrompt:Hide() end
         StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
-
-        -- Non-editors update their own copy so their displayed balance
-        -- is right immediately instead of waiting for the next sync.
-        if not IsAuthorized() and data.winner and (tonumber(data.cost) or 0) > 0 then
-            local d = RedGuild_Data and RedGuild_Data[data.winner]
-            if d then
-                d.spent = (d.spent or 0) + tonumber(data.cost)
-                RecalcBalance(d)
-                if UpdateTable then UpdateTable() end
-            end
-        end
         return
     end
 end
@@ -8559,9 +8787,14 @@ function RedGuild_Auction_OnWhisper(text, sender)
     ----------------------------------------------------------------
     if lower == "!os" then
         local ok, isLate = RedGuild_Auction_RecordBid(sender, 0, "OS", "whisper")
-        if ok and isLate then
+        if not ok then
+            AuctionWhisper(sender, "RedGuild: " .. (isLate or "not recorded."))
+        elseif isLate then
             AuctionWhisper(sender,
-                "RedGuild: bidding has already closed - off spec noted as LATE and may not be considered. Now /roll 69 and I will pick it up.")
+                "RedGuild: bidding has already closed - noted as LATE and may not be considered. Now /roll 69 and I will pick it up.")
+        elseif RedGuild_Auction.rollOnly then
+            AuctionWhisper(sender,
+                "RedGuild: noted. This item is roll only and costs no DKP - now /roll 69 and I will pick it up.")
         else
             AuctionWhisper(sender,
                 "RedGuild: off spec noted, it costs no DKP. Now /roll 69 and I will pick it up.")
@@ -8574,6 +8807,22 @@ function RedGuild_Auction_OnWhisper(text, sender)
     ----------------------------------------------------------------
     local amount, tail = lower:match("^!bid%s+(%d+)%s*(.*)$")
     if amount then
+        -- Nothing is bid on a roll-only item, so the whisper is taken
+        -- as a roll declaration rather than rejected outright.
+        if RedGuild_Auction.rollOnly then
+            local ok, isLate = RedGuild_Auction_RecordBid(sender, 0, "OS", "whisper")
+            if not ok then
+                AuctionWhisper(sender, "RedGuild: " .. (isLate or "not recorded."))
+            elseif isLate then
+                AuctionWhisper(sender,
+                    "RedGuild: this item is ROLL ONLY and costs no DKP. Bidding has already closed - noted as LATE. Now /roll 69.")
+            else
+                AuctionWhisper(sender,
+                    "RedGuild: this item is ROLL ONLY and costs no DKP. Noted - now /roll 69.")
+            end
+            return true
+        end
+
         -- Someone trying to bid DKP for off-spec. Register the
         -- off-spec roll instead and explain the rule.
         if tail and (tail:find("os", 1, true) or tail:find("off", 1, true)) then
@@ -8605,9 +8854,14 @@ function RedGuild_Auction_OnWhisper(text, sender)
     end
 
     if lower:match("^!bid") then
-        AuctionWhisper(sender, string.format(
-            "RedGuild: use  !bid <amount>  for main spec, minimum %d, for example  !bid 50. Off spec is /roll 69 only and costs no DKP.",
-            AUCTION_MIN_BID))
+        if RedGuild_Auction.rollOnly then
+            AuctionWhisper(sender,
+                "RedGuild: this item is ROLL ONLY - there are no DKP bids. Whisper !os and then /roll 69.")
+        else
+            AuctionWhisper(sender, string.format(
+                "RedGuild: use  !bid <amount>  for main spec, minimum %d, for example  !bid 50. Off spec is /roll 69 only and costs no DKP.",
+                AUCTION_MIN_BID))
+        end
         return true
     end
 
@@ -8693,6 +8947,26 @@ StaticPopupDialogs["REDGUILD_BID_CONFIRM_PASS"] = {
     timeout = 0, whileDead = true, hideOnEscape = false, preferredIndex = 3,
 }
 
+-- The line under the bid box. It has to be rebuilt rather than set
+-- once, because the OnUpdate below rewrites it every tick and the
+-- wording depends on what kind of item is up.
+local function PromptRuleText()
+    local parts = {}
+
+    if RedGuild_Auction.rollOnly then
+        table.insert(parts, "|cff55ccffRoll only|r - no DKP is charged for this item.")
+    end
+
+    local qty = tonumber(RedGuild_Auction.qty) or 1
+    if qty > 1 then
+        table.insert(parts, string.format(
+            "%d copies are being handed out - one bid or roll is enough.", qty))
+    end
+
+    table.insert(parts, "Closing this window or pressing Escape counts as a pass.")
+    return table.concat(parts, " ")
+end
+
 local function CreatePrompt()
     if auctionPrompt then return auctionPrompt end
 
@@ -8760,13 +9034,15 @@ local function CreatePrompt()
     local bidLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     bidLabel:SetPoint("TOPLEFT", f.balText, "BOTTOMLEFT", 0, -12)
     bidLabel:SetText(string.format("Main spec bid (min %d):", AUCTION_MIN_BID))
+    -- Kept on the frame so a roll-only item can hide the whole bid row.
+    f.bidLabel = bidLabel
 
     f.ruleText = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     f.ruleText:SetPoint("TOPLEFT", bidLabel, "BOTTOMLEFT", 0, -14)
     f.ruleText:SetPoint("RIGHT", f, "RIGHT", -16, 0)
     f.ruleText:SetJustifyH("LEFT")
     f.ruleText:SetWordWrap(true)
-    f.ruleText:SetText("Closing this window or pressing Escape counts as a pass.")
+    f.ruleText:SetText(PromptRuleText())
 
     f.amountBox = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
     f.amountBox:SetSize(70, 20)
@@ -8850,7 +9126,7 @@ local function CreatePrompt()
             return
         end
 
-        self.ruleText:SetText("Closing this window or pressing Escape counts as a pass.")
+        self.ruleText:SetText(PromptRuleText())
 
         local left = RedGuild_Auction_TimeLeft()
         if RedGuild_Auction.paused then
@@ -8876,7 +9152,8 @@ function RedGuild_Auction_ShowPrompt()
     local f = CreatePrompt()
     local bal = RedGuild_Auction_GetBalance(UnitName("player"))
 
-    f.itemText:SetText(RedGuild_Auction.itemLink or "Unknown item")
+    f.itemText:SetText(RedGuild_Auction.itemLink
+        and RedGuild_Auction_ItemLabel() or "Unknown item")
     f.icon:SetTexture(
         (RedGuild_Auction.itemID and GetItemIcon(RedGuild_Auction.itemID))
         or "Interface\\Icons\\INV_Misc_QuestionMark")
@@ -8886,6 +9163,27 @@ function RedGuild_Auction_ShowPrompt()
         f.balText:SetText(string.format("Your DKP: |cff00ff00%d|r", bal))
     end
     f.amountBox:SetText("")
+    f.ruleText:SetText(PromptRuleText())
+
+    -- A roll-only item has no DKP side, so the bid box and Bid button
+    -- are taken away entirely rather than left there to be typed into,
+    -- and the roll button moves to the middle where Bid used to sit.
+    if RedGuild_Auction.rollOnly then
+        f.bidLabel:Hide()
+        f.amountBox:Hide()
+        f.bidBtn:Hide()
+        f.osBtn:ClearAllPoints()
+        f.osBtn:SetPoint("BOTTOM", f, "BOTTOM", 0, 44)
+        f.osBtn:SetText("|TInterface\\Buttons\\UI-GroupLoot-Dice-Up:16:16:0:0|t Roll")
+    else
+        f.bidLabel:Show()
+        f.amountBox:Show()
+        f.bidBtn:Show()
+        f.osBtn:ClearAllPoints()
+        f.osBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -16, 44)
+        f.osBtn:SetText("|TInterface\\Buttons\\UI-GroupLoot-Dice-Up:16:16:0:0|t Roll OS")
+    end
+
     f:Show()
 end
 
@@ -8919,6 +9217,14 @@ local function CreateMasterRow(index, parent)
     row.srcText  = mk(336,  60)
 
     row:SetScript("OnClick", function(self)
+        -- On a multi-copy item, whoever already took one is shown but
+        -- cannot be selected again.
+        local b = self.bidder and RedGuild_Auction.bids[self.bidder]
+        if b and b.won then
+            AuctionPrint(string.format(
+                "%s already has a copy of this item.", b.name or self.bidder))
+            return
+        end
         RedGuild_Auction.selected = self.bidder
         RedGuild_Auction_RefreshMaster()
     end)
@@ -8930,7 +9236,9 @@ local function CreateMaster()
     if auctionMaster then return auctionMaster end
 
     local f = CreateFrame("Frame", "RedGuildAuctionFrame", UIParent, "BasicFrameTemplateWithInset")
-    f:SetSize(430, 430)
+    -- Taller than it was: the copies / roll-only row sits between the
+    -- item link box and the auction controls.
+    f:SetSize(430, 462)
     f:SetPoint("CENTER", UIParent, "CENTER", 250, 0)
     f:SetFrameStrata("HIGH")
     f:SetMovable(true)
@@ -9048,9 +9356,59 @@ local function CreateMaster()
     end)
     f.lootBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
+    ----------------------------------------------------------------
+    -- Copies + roll-only
+    ----------------------------------------------------------------
+    -- Both are read when Post is pressed, exactly like the duration,
+    -- and are locked while an item is up so they cannot drift out of
+    -- step with what the raid was told.
+    local qtyLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    qtyLabel:SetPoint("TOPLEFT", f.itemBox, "BOTTOMLEFT", 0, -10)
+    qtyLabel:SetText("Copies:")
+
+    f.qtyBox = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
+    f.qtyBox:SetSize(34, 20)
+    f.qtyBox:SetPoint("LEFT", qtyLabel, "RIGHT", 10, 0)
+    f.qtyBox:SetAutoFocus(false)
+    f.qtyBox:SetNumeric(true)
+    f.qtyBox:SetText("1")
+    f.qtyBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    f.qtyBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    f.qtyBox:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("|cffffff00Copies|r")
+        GameTooltip:AddLine("How many of this item dropped.", 1, 1, 1)
+        GameTooltip:AddLine("One auction, one bid from everyone,", 1, 1, 1)
+        GameTooltip:AddLine("and you award it once per copy.", 1, 1, 1)
+        GameTooltip:AddLine("Taking an item from the loot window fills this in.", 0.6, 0.6, 0.6)
+        GameTooltip:Show()
+    end)
+    f.qtyBox:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    f.rollOnlyCheck = CreateFrame("CheckButton", "RedGuildAuctionRollOnlyCheck", f,
+        "UICheckButtonTemplate")
+    f.rollOnlyCheck:SetSize(22, 22)
+    f.rollOnlyCheck:SetPoint("LEFT", f.qtyBox, "RIGHT", 18, 0)
+    f.rollOnlyCheck:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("|cffffff00Roll only|r")
+        GameTooltip:AddLine("For items nobody should spend DKP on,", 1, 1, 1)
+        GameTooltip:AddLine("such as recipes and patterns.", 1, 1, 1)
+        GameTooltip:AddLine("Bidders get a roll button and nothing else,", 0.6, 0.6, 0.6)
+        GameTooltip:AddLine("and the award always costs 0 DKP.", 0.6, 0.6, 0.6)
+        GameTooltip:Show()
+    end)
+    f.rollOnlyCheck:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    f.rollOnlyCheck:SetScript("OnClick", function() RedGuild_Auction_RefreshMaster() end)
+
+    local rollOnlyLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    rollOnlyLabel:SetPoint("LEFT", f.rollOnlyCheck, "RIGHT", 2, 0)
+    rollOnlyLabel:SetText("Roll only - no DKP bids")
+    f.rollOnlyLabel = rollOnlyLabel
+
     f.startBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.startBtn:SetSize(62, 22)
-    f.startBtn:SetPoint("TOPLEFT", f.itemBox, "BOTTOMLEFT", -6, -8)
+    f.startBtn:SetPoint("TOPLEFT", qtyLabel, "BOTTOMLEFT", -6, -10)
     f.startBtn:SetText("Post")
     f.startBtn:SetScript("OnClick", RedGuild_Auction_Start)
 
@@ -9185,6 +9543,7 @@ local function AuctionLootSlots()
             table.insert(out, {
                 slot     = slot,
                 link     = link,
+                id       = tonumber(link:match("item:(%d+)")),
                 texture  = texture,
                 quantity = (quantity and quantity > 1) and quantity or nil,
             })
@@ -9237,7 +9596,7 @@ local function CreateLootPicker()
 
         row:SetScript("OnClick", function(self)
             if self.link then
-                RedGuild_Auction_SetItem(self.link)
+                RedGuild_Auction_SetItem(self.link, self.copies)
             end
             p:Hide()
         end)
@@ -9276,14 +9635,30 @@ function RedGuild_Auction_RefreshLootPicker()
         return
     end
 
+    -- The same item can occupy several loot slots - two tier tokens
+    -- off one boss - and that is exactly the case the copies field is
+    -- for, so the count is worked out here and pre-filled on click.
+    local dupes = {}
+    for _, it in ipairs(items) do
+        if it.id then dupes[it.id] = (dupes[it.id] or 0) + 1 end
+    end
+
     local shown = math.min(#items, AUCTION_LOOT_MAX_ROWS)
     for i = 1, shown do
         local it  = items[i]
         local row = p.rows[i]
         row.slot = it.slot
         row.link = it.link
+        row.copies = math.max(
+            (it.id and dupes[it.id]) or 1,
+            it.quantity or 1)
         row.icon:SetTexture(it.texture or "Interface\\Icons\\INV_Misc_QuestionMark")
-        row.text:SetText(it.quantity and (it.link .. " x" .. it.quantity) or it.link)
+
+        local text = it.link
+        if row.copies > 1 then
+            text = string.format("%s |cffffff00x%d|r", it.link, row.copies)
+        end
+        row.text:SetText(text)
         row:Show()
     end
     for i = shown + 1, AUCTION_LOOT_MAX_ROWS do
@@ -9384,7 +9759,46 @@ function RedGuild_Auction_RefreshMaster()
     ----------------------------------------------------------------
     -- Header state
     ----------------------------------------------------------------
-    f.itemText:SetText(RedGuild_Auction.itemLink or "|cff888888No item selected|r")
+    ----------------------------------------------------------------
+    -- Item line: what is up, how many, and how many have gone out
+    ----------------------------------------------------------------
+    local label = RedGuild_Auction.itemLink or "|cff888888No item selected|r"
+    if RedGuild_Auction.posted then
+        label = RedGuild_Auction_ItemLabel()
+        if RedGuild_Auction.rollOnly then
+            label = "|cff55ccff[ROLL]|r " .. label
+        end
+        local q = tonumber(RedGuild_Auction.qty) or 1
+        if q > 1 then
+            label = label .. string.format("  |cff888888(%d of %d awarded)|r",
+                RedGuild_Auction.awarded or 0, q)
+        end
+    end
+    f.itemText:SetText(label)
+
+    -- Copies and roll-only are fixed for the life of an auction: the
+    -- raid was told what is up, so they cannot be edited underneath it.
+    if RedGuild_Auction.posted then
+        f.qtyBox:Disable()
+        f.rollOnlyCheck:Disable()
+        f.qtyBox:SetText(tostring(tonumber(RedGuild_Auction.qty) or 1))
+        f.rollOnlyCheck:SetChecked(RedGuild_Auction.rollOnly and true or false)
+    else
+        f.qtyBox:Enable()
+        f.rollOnlyCheck:Enable()
+    end
+
+    -- Nothing is ever charged on a roll-only item, so the cost box is
+    -- held at zero rather than left there to be typed into.
+    local rollOnlyNow = RedGuild_Auction.posted
+        and RedGuild_Auction.rollOnly
+        or (not RedGuild_Auction.posted and f.rollOnlyCheck:GetChecked())
+    if rollOnlyNow then
+        f.costBox:SetText("0")
+        f.costBox:Disable()
+    else
+        f.costBox:Enable()
+    end
 
     if RedGuild_Auction.open then
         local left = RedGuild_Auction_TimeLeft()
@@ -9440,11 +9854,17 @@ function RedGuild_Auction_RefreshMaster()
             row.bidText:SetText("|cff888888-|r")
         end
 
-        local modeColour = "|cffffffff"
-        if b.mode == "OS"   then modeColour = "|cff55ccff" end
-        if b.mode == "PASS" then modeColour = "|cff888888" end
-        if b.late            then modeColour = "|cffff0000" end
-        row.modeText:SetText(modeColour .. (b.mode or "?") .. "|r")
+        if b.won then
+            -- Already took a copy of this item. Kept on the list so
+            -- the editor can see who has what, but out of the running.
+            row.modeText:SetText("|cff00ff00WON|r")
+        else
+            local modeColour = "|cffffffff"
+            if b.mode == "OS"   then modeColour = "|cff55ccff" end
+            if b.mode == "PASS" then modeColour = "|cff888888" end
+            if b.late            then modeColour = "|cffff0000" end
+            row.modeText:SetText(modeColour .. (b.mode or "?") .. "|r")
+        end
 
         -- Balance is looked up live from the editor's own table, not
         -- from whatever the bidder claimed.
@@ -9460,7 +9880,9 @@ function RedGuild_Auction_RefreshMaster()
         -- A bid placed after bidding closed but before the item was
         -- awarded is still recorded, but the "Via" column flags it
         -- LATE so the editor can see it missed the window.
-        if b.late then
+        if b.won then
+            row.srcText:SetText(string.format("|cff00ff00copy %d|r", b.wonCopy or 1))
+        elseif b.late then
             row.srcText:SetText("|cffff0000LATE|r")
         else
             row.srcText:SetText("|cff888888" .. (b.src or "") .. "|r")
@@ -9486,10 +9908,21 @@ function RedGuild_Auction_RefreshMaster()
     ----------------------------------------------------------------
     if RedGuild_Auction.selected then
         local b = RedGuild_Auction.bids[RedGuild_Auction.selected]
-        if b and not f.costBox:HasFocus() then
+        if b and not f.costBox:HasFocus() and not rollOnlyNow then
             -- Main spec suggests the bid; off spec is always free.
             f.costBox:SetText(tostring(b.amount or 0))
         end
+    end
+
+    ----------------------------------------------------------------
+    -- Award button: says which copy is going out next
+    ----------------------------------------------------------------
+    local copies = tonumber(RedGuild_Auction.qty) or 1
+    if RedGuild_Auction.posted and copies > 1 then
+        f.awardBtn:SetText(string.format("Award copy %d of %d",
+            math.min((RedGuild_Auction.awarded or 0) + 1, copies), copies))
+    else
+        f.awardBtn:SetText("Award to selected")
     end
 end
 
@@ -9800,7 +10233,16 @@ function RedGuild_BidLog_Refresh()
         row.itemLink   = e.item
 
         row.whenText:SetText("|cff888888" .. (e.when or "") .. "|r")
-        row.itemText:SetText(e.item or "unknown item")
+
+        -- A multi-copy item writes one row per copy, so each says
+        -- which one it was.
+        local itemLabel = e.item or "unknown item"
+        if e.qty and e.copy then
+            itemLabel = string.format("%s |cff888888(%d/%d)|r", itemLabel, e.copy, e.qty)
+        elseif e.qty then
+            itemLabel = string.format("%s |cff888888(x%d)|r", itemLabel, e.qty)
+        end
+        row.itemText:SetText(itemLabel)
 
         if e.cancelled then
             row.winnerText:SetText("|cffff5555cancelled|r")
@@ -9810,7 +10252,8 @@ function RedGuild_BidLog_Refresh()
             row.winnerText:SetText(e.winner or "|cff888888-|r")
             row.costText:SetText(tostring(e.cost or 0))
             local modeColour = (e.mode == "OS") and "|cff55ccff" or "|cffffffff"
-            row.modeText:SetText(modeColour .. (e.mode or "") .. "|r")
+            row.modeText:SetText(modeColour ..
+                (e.rollOnly and "ROLL" or (e.mode or "")) .. "|r")
         end
 
         -- An editor's entry holds the whole book, so the count is real.
@@ -9850,10 +10293,13 @@ function RedGuild_BidLog_Refresh()
             BidLogStripLink(entry.item)))
     else
         p.detailTitle:SetText(string.format(
-            "%s  won by |cffffff00%s|r for |cffffff00%d|r DKP  (%s, run by %s)",
+            "%s%s  won by |cffffff00%s|r for |cffffff00%d|r DKP  (%s, run by %s)",
             BidLogStripLink(entry.item),
+            (entry.qty and entry.copy)
+                and string.format(" |cff888888copy %d of %d|r", entry.copy, entry.qty)
+                or "",
             entry.winner or "nobody", entry.cost or 0,
-            entry.mode or "?", entry.ml or "?"))
+            entry.rollOnly and "roll only" or (entry.mode or "?"), entry.ml or "?"))
     end
 
     local bids = entry.bids or {}
@@ -9878,6 +10324,9 @@ function RedGuild_BidLog_Refresh()
 
         if entry.winner and b.name == entry.winner then
             row.resultText:SetText("|cff00ff00won the item|r")
+        elseif b.won then
+            -- Took one of the other copies of the same item.
+            row.resultText:SetText("|cff888888won another copy|r")
         else
             row.resultText:SetText("")
         end
