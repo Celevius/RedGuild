@@ -582,15 +582,19 @@ local function RedGuild_GetSyncChannel(msgType, target)
         return "GUILD", nil
     end
 
-    -- REQUEST is small (never chunked) so a guild-wide send is cheap
-    -- on its own, but the manual "Request SYNC" button asks a specific
-    -- bestEditor by name - broadcasting it anyway meant every online
-    -- editor, not just the intended one, whispered back a full DKP
-    -- table (each now via the DATA fix above), multiplying traffic by
-    -- the number of online editors for no reason. Whisper when a
-    -- target was actually given; AttemptAutoSync's background check
-    -- still broadcasts with no target so any online editor can answer.
-    if msgType == "REQUEST" and target and target ~= "" then
+    -- REQUEST and EDITORREQ are small (never chunked) so a guild-wide
+    -- send would be cheap on its own, but both callers (the manual
+    -- "Request SYNC" button and AttemptAutoSync) already pick one
+    -- specific bestEditor to ask - broadcasting anyway meant every
+    -- online editor, not just the intended one, whispered back a full
+    -- DKP table or editor list (each now via the DATA/EDITORSYNC fixes
+    -- above), multiplying traffic by the number of online editors for
+    -- no reason. Whisper whenever a target was actually given; fall
+    -- through to the guild-wide default below for the rare case where
+    -- one wasn't (e.g. no bestEditor could be determined yet).
+    if (msgType == "REQUEST" or msgType == "EDITORREQ")
+        and target and target ~= ""
+    then
         return "WHISPER", GetExactName(target)
     end
 
@@ -1024,8 +1028,11 @@ function RedGuild_AutoRequestSync()
     C_Timer.After(2 + math.random() * 8, function()
         local me = Ambiguate(UnitName("player"), "short")
         if me and me ~= "" then
-            D("AUTO SYNC REQUEST after failed chunk repair")
-            RedGuild_Send("REQUEST", me)
+            -- Same reasoning as AttemptAutoSync: ask the one editor
+            -- whose reply is needed, not every online editor.
+            local bestEditor = GetHighestVersionEditor() or GetHighestRankEditor()
+            D("AUTO SYNC REQUEST after failed chunk repair, asking " .. tostring(bestEditor))
+            RedGuild_Send("REQUEST", me, bestEditor)
         end
     end)
 
