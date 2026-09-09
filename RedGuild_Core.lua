@@ -355,25 +355,7 @@ function UpdateSyncStatus()
 			bestEditor, bestVersion = getBest()
 		end
 
-        -- Your EditorVersions table already uses normalized keys
-        local myVersion = 0
-		if RedGuild_Config.EditorVersions then
-			-- EditorVersions keys are already normalized
-			for key, ver in pairs(RedGuild_Config.EditorVersions) do
-				if IsEditor(key) and IsEditor(me) and key == key then
-					-- But we actually want the version for THIS player:
-					-- So we compare normalized names using your IsEditor logic
-				end
-			end
-
-			-- The correct way: use IsEditor() to find the normalized key
-			for key, ver in pairs(RedGuild_Config.EditorVersions) do
-				if IsEditor(key) and IsEditor(me) then
-					-- Compare normalized names by using IsEditor() on both
-					if key == key then end -- ignore
-				end
-			end
-		end
+        local myVersion = tonumber(RedGuild_Config.dkpVersion or 0)
 
         if myVersion < bestVersion then
             dkpState = "red"
