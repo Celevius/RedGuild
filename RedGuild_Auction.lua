@@ -22,10 +22,6 @@
 --==================================================================
 
 local AUCTION_DEFAULT_DURATION = 30
--- Longest the auctioneer waits for the DKP push to clear the queue
--- before opening bidding anyway. A raid should never be stuck staring
--- at nothing because one payload is slow.
-AUCTION_SYNC_WAIT_MAX = 10
 -- Smallest main-spec bid the addon will accept.
 local AUCTION_MIN_BID          = 10
 local AUCTION_MAX_ROWS         = 60
@@ -266,39 +262,6 @@ end
 -- Bid book
 --------------------------------------------------
 
--- Push the current DKP table so nobody bids against a stale balance,
--- and so everyone sees the new balance right after an award.
--- This is a normal DATA sync, not FORCE_REQ: recipients apply it only
--- if their dkpVersion is behind, and it raises no prompt. FORCE_REQ
--- would ask every guild member to accept an overwrite, which is far
--- too heavy to fire once per item.
--- The DKP table is far bigger than one addon message, so a push is
--- dozens of chunks. Everything now goes through the shared outbound
--- queue, which paces the whole client rather than each sender on its
--- own - two pushes overlapping used to interleave into one burst and
--- trip the throttle anyway - and keeps the chunks for re-sending.
-local function AuctionSendThrottled(msgType, payload)
-    RedGuild_OutboundSeq = RedGuild_OutboundSeq + 1
-    local seq   = RedGuild_OutboundSeq
-    local total = math.ceil(#payload / REDGUILD_MAX_CHUNK)
-    if total == 0 then total = 1 end
-
-    local chunks = {}
-    for i = 1, total do
-        local startIdx = (i - 1) * REDGUILD_MAX_CHUNK + 1
-        chunks[i] = payload:sub(startIdx, startIdx + REDGUILD_MAX_CHUNK - 1)
-    end
-
-    RedGuild_CacheOutbound(seq, msgType, chunks)
-
-    for i = 1, total do
-        RedGuild_QueueChunk(
-            RedGuild_BuildChunkMsg(msgType, seq, i, total, chunks[i]), "GUILD")
-    end
-
-    return total
-end
-
 -- Same payload as the broadcast, whispered to one player who asked for
 -- it. Used when somebody joins late or missed the push: re-broadcasting
 -- the whole table to the guild for one person is wasteful, and the
@@ -335,43 +298,6 @@ function RedGuild_Auction_PushSyncTo(target)
 
     D(string.format("Auction sync whispered to %s in %d chunks",
         tostring(target), total))
-    return true
-end
-
-local lastPushedVersion, lastPushTime = nil, 0
-
--- Returns true when a push was actually put on the wire, so the
--- caller knows whether there is anything to wait for.
-function RedGuild_Auction_PushSync(reason)
-    if not IsAuthorized() then return false end
-    if RedGuild_SyncLocked then return false end
-    if RedGuild_Config.hideMeFromSync then
-        AuctionPrint("DKP not synced - 'Hide me from SYNC' is enabled.")
-        return false
-    end
-
-    -- Recipients discard a push whose dkpVersion is not ahead of
-    -- their own, so resending an unchanged table is pure traffic.
-    -- An award bumps the version, so the post-award push always goes.
-    local ver = tonumber(RedGuild_Config.dkpVersion or 0)
-    if lastPushedVersion == ver and (GetTime() - lastPushTime) < 300 then
-        D("Auction sync skipped - nothing changed since the last push")
-        return false
-    end
-    lastPushedVersion, lastPushTime = ver, GetTime()
-
-    local payload = BuildSyncPayload()
-    -- ApplySyncData reads dkpVersion from the top level of the
-    -- payload, so it has to be set here or every recipient will
-    -- read version 0 and discard the update.
-    payload.dkpVersion = tonumber(RedGuild_Config.dkpVersion or 0)
-    -- Tells the receiving editors this is the bidding sync, the one
-    -- kind of DATA they are allowed to apply.
-    payload.auctionSync = true
-
-    local chunks = AuctionSendThrottled("DATA", EncodePayload(payload))
-    D(string.format("Auction sync pushed (%s) in %d chunks",
-        tostring(reason), chunks))
     return true
 end
 
@@ -627,35 +553,9 @@ function RedGuild_Auction_Start()
         rollOnly = auctionMaster.rollOnlyCheck:GetChecked() and true or false
     end
 
-    -- Everyone has to be looking at their real balance before the
-    -- prompt appears, so the DKP push goes first and BID_START waits
-    -- behind it in the same outbound queue. Sending the announcement
-    -- first (as this used to) meant the prompt opened while the table
-    -- was still streaming, and bidders saw an old balance - or had a
-    -- bid rejected against one.
-    RedGuild_Auction.preparing = true
+    RedGuild_Auction.preparing = false
 
-    -- Nothing is bid and nothing is charged on a roll-only item, so
-    -- there is no balance to be stale and no reason to make the raid
-    -- wait on a DKP push: it opens straight away.
-    local pushed = false
-    if not rollOnly then
-        pushed = RedGuild_Auction_PushSync("auction start")
-        if pushed then
-            AuctionPrint("Syncing DKP - bidding opens once everyone has it.")
-        end
-    end
-
-    RedGuild_AfterOutbound(AUCTION_SYNC_WAIT_MAX, function()
-        -- Cancelled, or another auction claimed the slot, while the
-        -- table was going out.
-        if not RedGuild_Auction.preparing then
-            D("Auction start abandoned while syncing")
-            return
-        end
-        RedGuild_Auction.preparing = false
-
-        AuctionResetBook()
+    AuctionResetBook()
 
         RedGuild_Auction.id       = tostring(time()) .. "-" .. math.random(1000, 9999)
         RedGuild_Auction.ml       = Ambiguate(UnitName("player"), "short")
@@ -717,7 +617,6 @@ function RedGuild_Auction_Start()
         AuctionStartTicker()
 
         RedGuild_Auction_RefreshMaster()
-    end)
 end
 
 function RedGuild_Auction_Pause()
@@ -859,12 +758,6 @@ function RedGuild_Auction_Reopen()
         ((tonumber(RedGuild_Auction.qty) or 1) > 1)
             and string.format(" %d copies left.", RedGuild_Auction_Remaining()) or ""))
 
-    -- Same reasoning as on Start: nothing is charged on a roll-only
-    -- item, so there is no table worth pushing for it.
-    if not RedGuild_Auction.rollOnly then
-        RedGuild_Auction_PushSync("auction reopen")
-    end
-
     -- The auctioneer never receives their own BID_REOPEN, so refresh
     -- their own prompt directly, same as on a fresh Start.
     RedGuild_Auction_ShowPrompt()
@@ -875,7 +768,6 @@ function RedGuild_Auction_Reopen()
 end
 
 function RedGuild_Auction_Cancel()
-    -- Also aborts a start that is still waiting for its DKP push.
     RedGuild_Auction.preparing = false
     if not RedGuild_Auction.posted then return end
 
@@ -956,7 +848,6 @@ function RedGuild_Auction_Award(winner, cost)
             BumpDKPVersion()
             if UpdateTable then UpdateTable() end
             if UpdateSyncStatus then UpdateSyncStatus() end
-            RedGuild_Auction_PushSync("item awarded")
         end
     end
 
