@@ -1015,7 +1015,16 @@ end
 -- fresh sync instead of leaving the player to notice a chat line and
 -- press a button. Jittered and rate limited, because a raid-wide
 -- hiccup would otherwise have everyone request at the same instant.
-function RedGuild_AutoRequestSync()
+--
+-- Always asks the SAME editor whose transfer just failed, never a
+-- different one: that editor is who actually has this client's gap,
+-- and asking someone else instead (as this used to, via whichever
+-- editor looked "best" by version/rank) just starts a second,
+-- unrelated transfer from a second editor while the first is still
+-- the one this client is actually behind on.
+function RedGuild_AutoRequestSync(target)
+    if not target or target == "" then return false end
+
     local now = GetTime()
     if (now - (RedGuild_LastAutoRequest or 0)) < REDGUILD_AUTOREQ_COOLDOWN then
         return false
@@ -1028,11 +1037,8 @@ function RedGuild_AutoRequestSync()
     C_Timer.After(2 + math.random() * 8, function()
         local me = Ambiguate(UnitName("player"), "short")
         if me and me ~= "" then
-            -- Same reasoning as AttemptAutoSync: ask the one editor
-            -- whose reply is needed, not every online editor.
-            local bestEditor = GetHighestVersionEditor() or GetHighestRankEditor()
-            D("AUTO SYNC REQUEST after failed chunk repair, asking " .. tostring(bestEditor))
-            RedGuild_Send("REQUEST", me, bestEditor)
+            D("AUTO SYNC REQUEST after failed chunk repair, asking " .. tostring(target))
+            RedGuild_Send("REQUEST", me, target)
         end
     end)
 
@@ -1041,7 +1047,7 @@ end
 
 function RedGuild_SweepInboundChunks()
     local now = GetTime()
-    local dropped, lastFrom = 0, nil
+    local dropped, lastFrom, dataFrom = 0, nil, nil
 
     for chunkType, bucket in pairs(REDGUILD_Inbound or {}) do
         for bucketKey, entry in pairs(bucket) do
@@ -1066,6 +1072,14 @@ function RedGuild_SweepInboundChunks()
                     bucket[bucketKey] = nil
                     dropped  = dropped + 1
                     lastFrom = entry.from or lastFrom
+                    -- The auto-resync below only re-requests the DKP
+                    -- DATA sync, so it needs specifically the sender of
+                    -- the dropped DATA transfer, not just whichever
+                    -- bucket (DATA/EDITORSYNC/FORCE_REQ/ALTS) happened
+                    -- to be discarded last.
+                    if chunkType == "DATA" then
+                        dataFrom = entry.from or dataFrom
+                    end
                 end
             end
         end
@@ -1074,8 +1088,9 @@ function RedGuild_SweepInboundChunks()
     if dropped > 0 then
         -- Only reaches here after the repair whispers were ignored or
         -- the sender went offline, so retrying by hand is pointless
-        -- until something changes - fetch a fresh copy instead.
-        local requested = RedGuild_AutoRequestSync()
+        -- until something changes - fetch a fresh copy instead, from
+        -- the same editor whose transfer this actually was.
+        local requested = dataFrom and RedGuild_AutoRequestSync(dataFrom)
 
         if requested then
             SafeSetSyncWarning(string.format(
