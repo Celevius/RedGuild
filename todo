@@ -15,6 +15,7 @@ Features to deliver ASAP:
 * Add a small sync to check table version between non editors and colour the sync info if out of date (if an editor is not online)
 * Show only online filter option on the alt tracker
 * DKP Row archive (for users away for a long period) - essentially reinstates previous table tidyup functionality
+* (AUC) Bidding popup support for +1 ML
 
 Nice to haves (not essential):
 * Full code rebuild (claude)
