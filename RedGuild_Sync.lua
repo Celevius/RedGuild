@@ -251,13 +251,13 @@ function HandleSyncRequest(requester, sender)
         return
     end
 
-    local payload = BuildSyncPayload()
-    local encoded = EncodePayload(payload)
-
 	if not IsActiveGuildMember(requester) then
 		D("SYNC REQUEST → requester not in guild, ignoring")
     return
 	end
+
+    local payload = BuildSyncPayload()
+    local encoded = EncodePayload(payload)
 
     D("SYNC REQUEST → Sending DATA to " .. requester)
     RedGuild_Send("DATA", encoded, requester)
