@@ -46,6 +46,15 @@ Ideas for future releases (significant work):
 -------------------------------------------------------
 
 
+2.2.69 Changelog
+-------------------------------------------------------
+Added features:
+* Bid for items with a quantity higher then 1
+* Bid window with only rolls (for recipes etc.)
+
+-------------------------------------------------------
+
+
 2.1.69 Changelog
 -------------------------------------------------------
 Added features:
