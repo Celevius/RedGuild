@@ -555,12 +555,43 @@ local function RedGuild_GetSyncChannel(msgType, target)
         return "WHISPER", GetExactName(target)
     end
 
-    -- Chunked guild broadcasts
-    if msgType == "DATA"
-        or msgType == "EDITORSYNC"
-        or msgType == "FORCE_REQ"
-    then
+    -- DATA is the per-requester sync response (HandleSyncRequest): one
+    -- person asked, so only they need the table. Broadcasting it to the
+    -- whole guild instead - as this used to - means every online editor
+    -- answers every request to everyone, and a raid full of people
+    -- logging in at once turns into a pile of simultaneous guild-wide
+    -- chunk floods that blow through the outbound cache and the addon
+    -- message throttle, which is exactly what was showing up as nonstop
+    -- RESEND spam and "no longer cached" in a 25-person raid.
+    if msgType == "DATA" then
+        if not target or target == "" then return nil, nil end
+        return "WHISPER", GetExactName(target)
+    end
+
+    -- EDITORSYNC is the per-requester editor-list response
+    -- (BroadcastEditorListTo): every call site passes one specific
+    -- target, same bug as DATA above, same fix.
+    if msgType == "EDITORSYNC" then
+        if not target or target == "" then return nil, nil end
+        return "WHISPER", GetExactName(target)
+    end
+
+    -- FORCE_REQ is a deliberate one-to-many broadcast (the editor's
+    -- manual "Force Sync" action), so it stays guild-wide.
+    if msgType == "FORCE_REQ" then
         return "GUILD", nil
+    end
+
+    -- REQUEST is small (never chunked) so a guild-wide send is cheap
+    -- on its own, but the manual "Request SYNC" button asks a specific
+    -- bestEditor by name - broadcasting it anyway meant every online
+    -- editor, not just the intended one, whispered back a full DKP
+    -- table (each now via the DATA fix above), multiplying traffic by
+    -- the number of online editors for no reason. Whisper when a
+    -- target was actually given; AttemptAutoSync's background check
+    -- still broadcasts with no target so any online editor can answer.
+    if msgType == "REQUEST" and target and target ~= "" then
+        return "WHISPER", GetExactName(target)
     end
 
     -- Everything else → guild

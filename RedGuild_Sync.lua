@@ -260,7 +260,7 @@ function HandleSyncRequest(requester, sender)
 	end
 
     D("SYNC REQUEST → Sending DATA to " .. requester)
-    RedGuild_Send("DATA", encoded)
+    RedGuild_Send("DATA", encoded, requester)
 end
 
 function HandleSyncResponse(sender, msgType)
