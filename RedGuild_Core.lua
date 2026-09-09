@@ -122,17 +122,22 @@ function NormalizeName(name)
     return name
 end
 
-function ColourForSyncAge(timestamp)
+-- Shared by ColourForSyncAge and GetSyncAgeState: parses a
+-- "YYYY-MM-DD HH:MM:SS" timestamp and classifies its age into the
+-- same red/orange/green tiers both use. `reason` is "missing" (nil or
+-- "Never"), "invalid" (present but unparseable), or "ok" - only
+-- ColourForSyncAge needs that distinction, to show "Never" vs
+-- "Invalid" text; the color is red either way.
+local function ClassifySyncAge(timestamp)
     if not timestamp or timestamp == "Never" then
-        return "|cffff0000Never|r" -- treat missing as red
+        return "red", "missing"
     end
 
-    -- Parse "YYYY-MM-DD HH:MM:SS"
     local year, month, day, hour, min, sec =
         timestamp:match("(%d+)%-(%d+)%-(%d+) (%d+):(%d+):(%d+)")
 
     if not year then
-        return "|cffff0000Invalid|r"
+        return "red", "invalid"
     end
 
     local t = time({
@@ -147,12 +152,30 @@ function ColourForSyncAge(timestamp)
     local ageDays = (time() - t) / 86400
 
     if ageDays < 4 then
-        return "|cff00ff00" .. timestamp .. "|r" -- green
+        return "green", "ok"
     elseif ageDays < 7 then
-        return "|cffffa500" .. timestamp .. "|r" -- orange
+        return "orange", "ok"
     else
-        return "|cffff0000" .. timestamp .. "|r" -- red
+        return "red", "ok"
     end
+end
+
+local SYNC_AGE_COLOR = {
+    green  = "|cff00ff00",
+    orange = "|cffffa500",
+    red    = "|cffff0000",
+}
+
+function ColourForSyncAge(timestamp)
+    local state, reason = ClassifySyncAge(timestamp)
+
+    if reason == "missing" then
+        return "|cffff0000Never|r"
+    elseif reason == "invalid" then
+        return "|cffff0000Invalid|r"
+    end
+
+    return SYNC_AGE_COLOR[state] .. timestamp .. "|r"
 end
 
 function GetExactName(name)
@@ -293,35 +316,7 @@ function GetHighestAltVersionUser()
 end
 
 local function GetSyncAgeState(timestamp)
-    if not timestamp or timestamp == "Never" then
-        return "red"
-    end
-
-    local year, month, day, hour, min, sec =
-        timestamp:match("(%d+)%-(%d+)%-(%d+) (%d+):(%d+):(%d+)")
-
-    if not year then
-        return "red"
-    end
-
-    local t = time({
-        year = year,
-        month = month,
-        day = day,
-        hour = hour,
-        min = min,
-        sec = sec,
-    })
-
-    local ageDays = (time() - t) / 86400
-
-    if ageDays < 4 then
-        return "green"
-    elseif ageDays < 7 then
-        return "orange"
-    else
-        return "red"
-    end
+    return (ClassifySyncAge(timestamp))
 end
 
 function UpdateSyncStatus()
