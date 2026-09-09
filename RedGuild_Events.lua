@@ -498,7 +498,11 @@ if event == "CHAT_MSG_ADDON" then
     -- VERSION HANDSHAKE
     ---------------------------------------------------------
     if simpleType == "VERSIONREQ" then
-        RedGuild_Send("VERSIONREP", REDGUILD_VERSION)
+        -- Whispered back to whoever actually asked: broadcasting this
+        -- to the guild meant every addon user online replied to every
+        -- other addon user's login-time VERSIONREQ, an O(n^2) burst of
+        -- unpaced addon messages in a big raid.
+        RedGuild_Send("VERSIONREP", REDGUILD_VERSION, sender)
 		return
     end
 

@@ -598,6 +598,21 @@ local function RedGuild_GetSyncChannel(msgType, target)
         return "WHISPER", GetExactName(target)
     end
 
+    -- VERSIONREP is the per-requester reply to one login's VERSIONREQ;
+    -- it has no reason to go to anyone but whoever asked.
+    if msgType == "VERSIONREP" and target and target ~= "" then
+        return "WHISPER", GetExactName(target)
+    end
+
+    -- ALTS_DATA is the alt-tracker snapshot sent to one requester
+    -- (only the single highest-version alt holder ever replies, so
+    -- this isn't a fan-out risk like DATA/EDITORSYNC were, but there
+    -- is still no reason for the whole guild to receive one person's
+    -- answer to another person's request).
+    if msgType == "ALTS_DATA" and target and target ~= "" then
+        return "WHISPER", GetExactName(target)
+    end
+
     -- Everything else → guild
     return "GUILD", nil
 end
