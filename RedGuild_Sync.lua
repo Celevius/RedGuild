@@ -303,7 +303,6 @@ function AttemptAutoSync()
 
     EnsureSaved()
     EnsureAddonUsers()
-    UpdateOnlineEditors()
 
     local me = UnitName("player")
     if not me then
@@ -326,13 +325,8 @@ function AttemptAutoSync()
         return
     end
 
-    local bestEditor = GetHighestVersionEditor()
+    local bestEditor = GetPreferredEditor()
 
-	-- Fallback if no version info yet
-	if not bestEditor then
-		bestEditor = GetHighestRankEditor()
-	end
-	
     if not bestEditor then
         SafeSetSyncWarning("Correct editor not online — your DKP may be outdated.")
         return

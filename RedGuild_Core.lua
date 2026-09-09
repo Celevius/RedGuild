@@ -17,7 +17,6 @@ REDGUILD_CHAT_PREFIX = "REDGUILD"
 
 RedGuild_Config.smartSync      		= (RedGuild_Config.smartSync ~= false)
 RedGuild_Config.addonUsers     		= RedGuild_Config.addonUsers     or {}
-RedGuild_Config.onlineEditors  		= RedGuild_Config.onlineEditors  or {}
 RedGuild_Config.hideMeFromSync 		= RedGuild_Config.hideMeFromSync or false
 RedGuild_Config.EditorVersions 		= RedGuild_Config.EditorVersions or {}
 
@@ -329,8 +328,8 @@ function UpdateSyncStatus()
     -- EDITOR-SPECIFIC LOGIC (modify dkpState before the priority system)
     ----------------------------------------------------------------
     if IsEditor(me) then
-        -- DKP Sync only red if NOT highest-version editor
-        local bestEditor, bestVersion = GetHighestVersionEditor()
+        -- DKP Sync only red if behind the preferred (authoritative) editor
+        local bestEditor, bestVersion = GetPreferredEditor()
         local myVersion = tonumber(RedGuild_Config.dkpVersion or 0)
 
         if myVersion < bestVersion then
@@ -1053,10 +1052,11 @@ function IsAuthorized()
     return IsEditor(UnitName("player"))
 end
 
--- Editor status is derived entirely from the player's current guild
--- rank - ranks 1 and 5 - rather than a manually maintained list, so
--- it needs no sync protocol: everyone already sees the same guild
--- roster natively.
+-- Fixed editors. Celevius is authoritative for sync whenever online;
+-- Lunátic is only the backup, used when Celevius is not - see
+-- GetPreferredEditor below.
+EDITOR_PRIORITY = { "Celevius", "Lunátic" }
+
 function IsEditor(name)
     if not name then
         name = UnitName("player")
@@ -1065,12 +1065,9 @@ function IsEditor(name)
     local key = NormalizeName(name)
     if not key then return false end
 
-    if not IsInGuild() then return false end
-
-    for i = 1, GetNumGuildMembers() do
-        local gName, _, rankIndex = GetGuildRosterInfo(i)
-        if gName and NormalizeName(Ambiguate(gName, "short")) == key then
-            return rankIndex == 1 or rankIndex == 5
+    for _, editorName in ipairs(EDITOR_PRIORITY) do
+        if NormalizeName(editorName) == key then
+            return true
         end
     end
 
@@ -1297,71 +1294,20 @@ local function ClearOfflineAddonUsers()
 end
 
 
-function GetHighestVersionEditor()
-    local bestEditor = nil
-    local bestVersion = -1
-
-    for name, ver in pairs(RedGuild_Config.EditorVersions) do
-        if IsEditor(name) and IsAddonUserOnlineForTooltip(name) then
-            if tonumber(ver) and ver > bestVersion then
-                bestVersion = ver
-                bestEditor = name
-            end
+-- Who to sync from: Celevius whenever he's online, Lunátic only when
+-- Celevius is not. Also returns that editor's last-known DKP version
+-- (from EditorVersions), same shape the old highest-version lookup
+-- returned, so callers that check a version still work.
+function GetPreferredEditor()
+    for _, editorName in ipairs(EDITOR_PRIORITY) do
+        if IsAddonUserOnlineForTooltip(editorName) then
+            local key = NormalizeName(editorName)
+            local ver = RedGuild_Config.EditorVersions and RedGuild_Config.EditorVersions[key]
+            return editorName, tonumber(ver) or 0
         end
     end
 
-    return bestEditor, bestVersion
-end
-
---------------------------------------------------------------------
--- UPDATE ONLINE EDITORS + VERSION NEGOTIATION
---------------------------------------------------------------------
-
-function GetHighestRankEditor()
-    D("GetHighestRankEditor called")
-
-    local bestName = nil
-    local bestRank = 99
-
-    for short, info in pairs(RedGuild_Config.onlineEditors) do
-        local realName = info.name
-        local rankIndex = info.rankIndex or 99
-
-        if rankIndex < bestRank then
-            bestRank = rankIndex
-            bestName = realName
-        end
-    end
-
-    D("Highest rank editor = " .. tostring(bestName))
-    return bestName
-end
-
-function UpdateOnlineEditors()
-
-    local total = GetNumGuildMembers()
-    if total == 0 then
-        C_Timer.After(1, UpdateOnlineEditors)
-        return
-    end
-
-    RedGuild_Config.onlineEditors = {}
-
-    for i = 1, total do
-        local name, _, rankIndex, _, _, _, _, _, online = GetGuildRosterInfo(i)
-        if name then
-            local real = Ambiguate(name, "short")
-            local key  = NormalizeName(real)
-
-            -- Ranks 1 and 5 are editors.
-            if (rankIndex == 1 or rankIndex == 5) and online then
-                RedGuild_Config.onlineEditors[key] = {
-                    name = real,
-                    rankIndex = rankIndex
-                }
-            end
-        end
-    end
+    return nil, 0
 end
 
 local function RedGuild_ChatFilter(self, event, msg, sender, ...)

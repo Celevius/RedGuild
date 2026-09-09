@@ -415,7 +415,6 @@ requestBtn:SetScript("OnClick", function()
                 -- ORIGINAL SYNC REQUEST CODE (unchanged)
                 ------------------------------------------------------------
                 EnsureSaved()
-                UpdateOnlineEditors()
 
                 local meReal = Ambiguate(UnitName("player"), "short")
                 if not meReal or meReal == "" then
@@ -439,7 +438,7 @@ requestBtn:SetScript("OnClick", function()
                     return
                 end
 
-                local bestEditor = GetHighestRankEditor()
+                local bestEditor = GetPreferredEditor()
                 if not bestEditor then
                     Print("No editor online — cannot request sync.")
                     return
@@ -460,7 +459,6 @@ requestBtn:SetScript("OnClick", function()
     -- NON‑EDITORS: run original code immediately
     ------------------------------------------------------------
     EnsureSaved()
-    UpdateOnlineEditors()
 
     local meReal = Ambiguate(UnitName("player"), "short")
     if not meReal or meReal == "" then
@@ -484,7 +482,7 @@ requestBtn:SetScript("OnClick", function()
         return
     end
 
-    local bestEditor = GetHighestRankEditor()
+    local bestEditor = GetPreferredEditor()
     if not bestEditor then
         Print("No editor online — cannot request sync.")
         return

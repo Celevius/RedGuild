@@ -59,7 +59,6 @@ if event == "PLAYER_LOGIN" then
     CheckGuildRestriction()
     CreateUI()
     RedGuild_Auction_AttachUI()
-    UpdateOnlineEditors()
     -- removed to try improve lag on load
 	--C_GuildInfo.GuildRoster()
 
@@ -88,12 +87,7 @@ if event == "PLAYER_LOGIN" then
 		end
     end)
 
-    -- Periodic editor list refresh for users (every 60s)
-    C_Timer.NewTicker(60, function()
-        UpdateOnlineEditors()
-    end)
-	
-	-- Periodic sync status refresh (every 10 seconds)
+    -- Periodic sync status refresh (every 10 seconds)
 	C_Timer.NewTicker(10, function()
 		if mainFrame and mainFrame:IsShown() then
 			UpdateSyncStatus()
@@ -112,7 +106,6 @@ end
     ---------------------------------------------------------
     if event == "GUILD_ROSTER_UPDATE" or event == "PLAYER_GUILD_UPDATE" then
         CheckGuildRestriction()
-        UpdateOnlineEditors()
 
         if not firstRosterReady then
             if IsInGuild() and GetNumGuildMembers() > 0 then

@@ -92,7 +92,7 @@ end)
         local note = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         note:SetPoint("BOTTOMLEFT", editorsPanel, "BOTTOMLEFT", 10, 10)
         note:SetJustifyH("LEFT")
-        note:SetText("|cffaaaaaa* Guild rank 1 and rank 5 are editors.|r")
+        note:SetText("|cffaaaaaa* Celevius and Lunátic are the fixed editors.|r")
     end
 
 ----------------------------------------------------------------

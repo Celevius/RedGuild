@@ -81,11 +81,11 @@ GameTooltip:AddLine("|cffffffffAddon users: |r" .. online .. " / " .. total)
 GameTooltip:AddLine("|cffffff00DKP Data|r")
 GameTooltip:AddLine("|cffffffffLast: |r" .. ColourForSyncAge(RedGuild_Config.lastDKPSync or "Never"))
 GameTooltip:AddLine("|cffffffffFrom: |r" .. (RedGuild_Config.lastDKPSyncFrom or "?"))
-local bestEditor, bestVersion = GetHighestVersionEditor()
-	if bestEditor and bestVersion then
-		GameTooltip:AddLine("|cffffffffHighest version: |r" .. bestVersion .. " (" .. bestEditor .. ")")
+local bestEditor, bestVersion = GetPreferredEditor()
+	if bestEditor then
+		GameTooltip:AddLine("|cffffffffSyncing from: |r" .. bestEditor .. " (v" .. bestVersion .. ")")
 	else
-		GameTooltip:AddLine("|cffffffffHighest version: |r?")
+		GameTooltip:AddLine("|cffffffffSyncing from: |r no editor online")
 	end
 GameTooltip:AddLine("|cffffffffYour version: |r" .. (RedGuild_Config.dkpVersion or "?"))
 GameTooltip:AddLine(" ")

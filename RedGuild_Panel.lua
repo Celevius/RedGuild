@@ -997,16 +997,8 @@ end
 function RefreshEditorList()
     if not editorRows then return end
 
-    local names = {}
-    if IsInGuild() then
-        for i = 1, GetNumGuildMembers() do
-            local gName, _, rankIndex = GetGuildRosterInfo(i)
-            if gName and (rankIndex == 1 or rankIndex == 5) then
-                table.insert(names, Ambiguate(gName, "short"))
-            end
-        end
-    end
-    table.sort(names)
+    -- Fixed editors, in sync priority order (Celevius first).
+    local names = EDITOR_PRIORITY
 
     -- Fill rows
     local i = 1
