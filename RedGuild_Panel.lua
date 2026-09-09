@@ -29,6 +29,27 @@ function RealignTabs()
     end
 end
 
+-- The editor-only tabs (Bid Log, RL Tools, Editors, Audit Log) are
+-- always created in CreateUI, but a player's own editor status can
+-- resolve after that: EnsureProtectedEditor() runs later at login (or
+-- only once the guild roster arrives), and an incoming editor-list
+-- sync can promote or demote the local player mid-session. Called
+-- from all of those points so the tabs show up (or disappear) without
+-- needing a UI reload.
+function RedGuild_UpdateEditorTabVisibility()
+    if not tabs[TAB_BIDLOG] then return end   -- CreateUI hasn't run yet
+
+    local editor = IsEditor(UnitName("player"))
+    for _, idx in ipairs({ TAB_BIDLOG, TAB_RAID, TAB_EDITORS, TAB_AUDIT }) do
+        local tab = tabs[idx]
+        if tab then
+            if editor then tab:Show() else tab:Hide() end
+        end
+    end
+
+    RealignTabs()
+end
+
 function LayoutPanel(panel)
     panel:SetAllPoints(mainFrame)
     panel:Hide()
@@ -1053,6 +1074,7 @@ RedGuild_Config.authorizedEditors = normalized
 
     UpdateOnlineEditors()
     RefreshEditorList()
+    RedGuild_UpdateEditorTabVisibility()
 end
 
 function RefreshEditorList()

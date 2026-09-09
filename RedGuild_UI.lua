@@ -123,14 +123,17 @@ tabs[TAB_ML]:HookScript("OnClick", function()
     C_Timer.After(0.05, RefreshMLTools)
 end)
 	
-	if IsEditor(UnitName("player")) then
+    -- Always created, not just for players who already pass IsEditor()
+    -- here: that status can still resolve after this point (protected
+    -- editor grant, or an editor-list sync still in flight), and these
+    -- tabs are never rebuilt afterward. RedGuild_UpdateEditorTabVisibility
+    -- decides which of them actually show, now and whenever editor
+    -- status changes.
     CreateTab(TAB_BIDLOG, "Bid Log")
     CreateTab(TAB_RAID, "RL Tools")
     CreateTab(TAB_EDITORS, "Editors")
     CreateTab(TAB_AUDIT,   "Audit Log")
-	end
-
-	RealignTabs()
+    RedGuild_UpdateEditorTabVisibility()   -- also calls RealignTabs()
     --------------------------------------------------------------------
     -- PANELS
     --------------------------------------------------------------------

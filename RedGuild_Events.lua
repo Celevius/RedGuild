@@ -79,6 +79,7 @@ if event == "PLAYER_LOGIN" then
 
     EnsureSaved()
     EnsureProtectedEditor()
+    RedGuild_UpdateEditorTabVisibility()
 
     -- Version handshake: ask guild addon users for their version
     C_Timer.After(5, function()
@@ -134,6 +135,7 @@ end
                 if anyName then
                     firstRosterReady = true
                     EnsureProtectedEditor()
+                    RedGuild_UpdateEditorTabVisibility()
 					if IsInGuild() and GetNumGuildMembers() > 0 then
 						PopulateGuildClasses()
 					end
