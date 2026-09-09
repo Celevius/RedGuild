@@ -23,7 +23,6 @@ libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
 libs\LibDBIcon-1.0\embeds.xml
 
 
-RedGuild_Helpers.lua
 RedGuild_Core.lua
 RedGuild_Panel.lua
 RedGuild_UI.lua
