@@ -358,7 +358,13 @@ function UpdateSyncStatus()
 end
 
 
-REDGUILD_MAX_CHUNK = 200
+-- Addon messages top out around 255 bytes. The worst case line is
+-- "REDGUILD:FORCE_REQ:######:###:###:" (prefix + longest msgType +
+-- a 6-digit seq + 3-digit part/total, all colon separated) at 34
+-- bytes, so 220 bytes of chunk data leaves a safe margin without
+-- risking truncation. Bigger than the old 200 means fewer chunks -
+-- and fewer addon messages - for every sync.
+REDGUILD_MAX_CHUNK = 220
 RedGuild_OutboundSeq = 0
 RedGuild_Data   = RedGuild_Data   or {}
 RedGuild_Config = RedGuild_Config or {}
@@ -407,6 +413,19 @@ end
 REDGUILD_CHUNK_DELAY     = 0.15   -- seconds between outbound chunks
 REDGUILD_OUT_CACHE_MAX   = 10     -- payloads kept for re-sending
 REDGUILD_OUT_CACHE_TTL   = 300    -- seconds a cached payload lives
+
+-- Sync request batching: every chunked send an editor makes shares
+-- the one paced queue above, so several people requesting a sync
+-- within moments of each other (a raid all logging in at once) used
+-- to queue up as separate full-table whispers, one after another -
+-- the last person in line could be waiting the better part of a
+-- minute. HandleSyncRequest now holds a request open for a short
+-- window to see if others are about to ask too; if enough do, it
+-- answers everyone with a single guild-wide broadcast instead of one
+-- transfer per person.
+REDGUILD_SYNC_BATCH_WINDOW    = 2   -- seconds of quiet before answering
+REDGUILD_SYNC_BATCH_MAX_WAIT  = 6   -- longest the first asker is made to wait
+REDGUILD_SYNC_BATCH_THRESHOLD = 3   -- requesters needed to switch to a broadcast
 
 RedGuild_OutboundCache = RedGuild_OutboundCache or {}
 RedGuild_OutboundQueue = RedGuild_OutboundQueue or {}
@@ -518,6 +537,10 @@ local function RedGuild_GetSyncChannel(msgType, target)
     -- message throttle, which is exactly what was showing up as nonstop
     -- RESEND spam and "no longer cached" in a 25-person raid.
     if msgType == "DATA" then
+        -- "GUILD" is the explicit broadcast sentinel HandleSyncRequest's
+        -- batching uses when enough people asked at once that one
+        -- shared broadcast is cheaper than answering each individually.
+        if target == "GUILD" then return "GUILD", nil end
         if not target or target == "" then return nil, nil end
         return "WHISPER", GetExactName(target)
     end

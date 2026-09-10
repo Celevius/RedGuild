@@ -234,6 +234,80 @@ function ApplySyncData(sender, encoded)
     D("Sync applied successfully")
 end
 
+------------------------------------------------------------
+-- Sync request batching
+------------------------------------------------------------
+-- See REDGUILD_SYNC_BATCH_* in RedGuild_Core.lua for the tuning
+-- constants and the reasoning. A lone requester still just gets a
+-- whisper; once enough people are asking around the same time this
+-- switches to one shared guild broadcast that answers all of them
+-- (and, incidentally, anyone else who happens to be behind too) in a
+-- single transfer instead of one queued up after another.
+RedGuild_PendingSyncRequesters = RedGuild_PendingSyncRequesters or {}
+local syncBatchStart        = nil
+local syncBatchLastSeen     = nil
+local syncBatchTimerRunning = false
+
+local function RedGuild_FlushSyncBatch()
+    local requesters = RedGuild_PendingSyncRequesters
+    RedGuild_PendingSyncRequesters = {}
+    syncBatchStart    = nil
+    syncBatchLastSeen = nil
+
+    if #requesters == 0 then return end
+
+    local payload = BuildSyncPayload()
+    local encoded = EncodePayload(payload)
+
+    if #requesters < REDGUILD_SYNC_BATCH_THRESHOLD then
+        for _, name in ipairs(requesters) do
+            D("SYNC REQUEST → Sending DATA to " .. name)
+            RedGuild_Send("DATA", encoded, name)
+        end
+        return
+    end
+
+    D(string.format(
+        "SYNC REQUEST → %d requesters in this window, broadcasting DATA once instead of %d separate whispers",
+        #requesters, #requesters))
+    RedGuild_Send("DATA", encoded, "GUILD")
+end
+
+local function RedGuild_SyncBatchTick()
+    local now = GetTime()
+
+    if #RedGuild_PendingSyncRequesters == 0 then
+        syncBatchTimerRunning = false
+        return
+    end
+
+    if (now - (syncBatchLastSeen or now)) >= REDGUILD_SYNC_BATCH_WINDOW
+       or (now - (syncBatchStart or now)) >= REDGUILD_SYNC_BATCH_MAX_WAIT
+    then
+        syncBatchTimerRunning = false
+        RedGuild_FlushSyncBatch()
+        return
+    end
+
+    C_Timer.After(0.5, RedGuild_SyncBatchTick)
+end
+
+local function RedGuild_QueueSyncRequester(name)
+    for _, existing in ipairs(RedGuild_PendingSyncRequesters) do
+        if existing == name then return end
+    end
+    table.insert(RedGuild_PendingSyncRequesters, name)
+
+    local now = GetTime()
+    if not syncBatchStart then syncBatchStart = now end
+    syncBatchLastSeen = now
+
+    if not syncBatchTimerRunning then
+        syncBatchTimerRunning = true
+        C_Timer.After(REDGUILD_SYNC_BATCH_WINDOW, RedGuild_SyncBatchTick)
+    end
+end
+
 function HandleSyncRequest(requester, sender, requesterVersion)
     EnsureSaved()
 
@@ -266,11 +340,7 @@ function HandleSyncRequest(requester, sender, requesterVersion)
         return
     end
 
-    local payload = BuildSyncPayload()
-    local encoded = EncodePayload(payload)
-
-    D("SYNC REQUEST → Sending DATA to " .. requester)
-    RedGuild_Send("DATA", encoded, requester)
+    RedGuild_QueueSyncRequester(requester)
 end
 
 function HandleSyncResponse(sender, msgType)
