@@ -147,5 +147,35 @@ hideSyncChk:SetScript("OnClick", function(self)
     RedGuild_Config.hideMeFromSync = self:GetChecked() and true or false
 end)
 
+------------------------------------------------------------
+-- AUTO-SYNC ON STALE BID CHECKBOX
+------------------------------------------------------------
+-- Controls the BID_SYNCREQ exchange: a bidder whose local DKP table
+-- is older than the version an auction was posted under asks the
+-- auctioneer for a fresh one, whispered, a few seconds after the
+-- prompt opens. Unchecking this disables it in both directions on
+-- this client - it won't ask when bidding, and won't answer such a
+-- request when auctioneering.
+local bidSyncChk = CreateFrame("CheckButton", nil, editorsPanel, "ChatConfigCheckButtonTemplate")
+bidSyncChk:SetSize(18, 18)
+bidSyncChk:ClearAllPoints()
+bidSyncChk:SetPoint("TOP", hideSyncChk, "BOTTOM", 0, -8)
+
+local bidSyncLabel = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+bidSyncLabel:SetPoint("LEFT", bidSyncChk, "RIGHT", 4, 0)
+bidSyncLabel:SetText("Auto-sync on stale bid")
+
+bidSyncChk:SetHitRectInsets(4, 4, 4, 4)
+
+-- Load saved state
+C_Timer.After(0.05, function()
+    bidSyncChk:SetChecked(RedGuild_Config.bidSyncEnabled ~= false)
+end)
+
+-- Save state when clicked
+bidSyncChk:SetScript("OnClick", function(self)
+    RedGuild_Config.bidSyncEnabled = self:GetChecked() and true or false
+end)
+
 
 end

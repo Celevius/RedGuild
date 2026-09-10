@@ -1071,11 +1071,14 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
         -- Still behind the version this item was posted under: the
         -- push was missed or is mid-repair. The prompt shows the
         -- balance as syncing and corrects itself the moment the data
-        -- lands; if it has not landed shortly, ask for it.
-        if RedGuild_Auction_DKPStale() then
+        -- lands; if it has not landed shortly, ask for it - unless
+        -- the "Auto-sync on stale bid" checkbox on the Editors tab is
+        -- off, in which case the balance just stays "syncing...".
+        if RedGuild_Config.bidSyncEnabled ~= false and RedGuild_Auction_DKPStale() then
             D("BID_START ahead of local DKP version - waiting on sync")
             C_Timer.After(3, function()
-                if RedGuild_Auction_DKPStale() and RedGuild_Auction.posted then
+                if RedGuild_Config.bidSyncEnabled ~= false
+                   and RedGuild_Auction_DKPStale() and RedGuild_Auction.posted then
                     -- Straight to the auctioneer: a guild-wide REQUEST
                     -- comes back as ordinary DATA, which this client
                     -- would refuse if it is an editor.
@@ -1091,7 +1094,10 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
     ----------------------------------------------------------------
     if msgType == "BID_SYNCREQ" then
         -- Somebody is bidding against a table older than the one this
-        -- item was posted under. Send them the current one directly.
+        -- item was posted under. Send them the current one directly -
+        -- unless this client has "Auto-sync on stale bid" off, in
+        -- which case no sync happens in either direction.
+        if RedGuild_Config.bidSyncEnabled == false then return end
         if not RedGuild_Auction_IsAuctioneer() then return end
         if data.id ~= RedGuild_Auction.id then return end
         if not IsActiveGuildMember(sender) then return end

@@ -16,6 +16,7 @@ REDGUILD_VERSION = "2.2.69"
 REDGUILD_CHAT_PREFIX = "REDGUILD"
 
 RedGuild_Config.smartSync      		= (RedGuild_Config.smartSync ~= false)
+RedGuild_Config.bidSyncEnabled 		= (RedGuild_Config.bidSyncEnabled ~= false)
 RedGuild_Config.addonUsers     		= RedGuild_Config.addonUsers     or {}
 RedGuild_Config.hideMeFromSync 		= RedGuild_Config.hideMeFromSync or false
 RedGuild_Config.EditorVersions 		= RedGuild_Config.EditorVersions or {}
@@ -972,7 +973,7 @@ function RedGuild_AutoRequestSync(target)
         local me = Ambiguate(UnitName("player"), "short")
         if me and me ~= "" then
             D("AUTO SYNC REQUEST after failed chunk repair, asking " .. tostring(target))
-            RedGuild_Send("REQUEST", me, target)
+            RedGuild_Send("REQUEST", me .. "|" .. tostring(RedGuild_Config.dkpVersion or 0), target)
         end
     end)
 
