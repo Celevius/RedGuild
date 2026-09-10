@@ -413,6 +413,7 @@ end
 REDGUILD_CHUNK_DELAY     = 0.15   -- seconds between outbound chunks
 REDGUILD_OUT_CACHE_MAX   = 10     -- payloads kept for re-sending
 REDGUILD_OUT_CACHE_TTL   = 300    -- seconds a cached payload lives
+REDGUILD_CHUNK_RETRY_MAX = 6      -- throttled attempts before a chunk is given up on
 
 -- Sync request batching: every chunked send an editor makes shares
 -- the one paced queue above, so several people requesting a sync
@@ -431,17 +432,51 @@ RedGuild_OutboundCache = RedGuild_OutboundCache or {}
 RedGuild_OutboundQueue = RedGuild_OutboundQueue or {}
 RedGuild_OutboundBusy  = false
 
+-- The client silently used to be trusted to have sent whatever was
+-- handed to it. It does not: C_ChatInfo.SendAddonMessage reports back
+-- whether the send actually went out or was throttled, on any client
+-- that exposes Enum.SendAddonMessageResult. Older clients without
+-- that enum fall back to the old blind-trust behavior - there is
+-- nothing to check on those.
+function RedGuild_SendRaw(msg, channel, target)
+    local result = C_ChatInfo.SendAddonMessage(REDGUILD_CHAT_PREFIX, msg, channel, target)
+    if type(result) == "number" and Enum and Enum.SendAddonMessageResult then
+        return result == Enum.SendAddonMessageResult.Success
+    end
+    return true
+end
+
+-- Peeks rather than pops: a throttled chunk stays at the front of the
+-- queue and is retried, with a growing backoff, instead of being
+-- blindly treated as delivered and left for the receiver to notice
+-- missing minutes later. A chunk that keeps failing gives up after
+-- REDGUILD_CHUNK_RETRY_MAX tries rather than stalling the whole queue
+-- behind it forever - anything actually lost is still caught by the
+-- existing chunk repair/resend path on the receiving end.
 local function RedGuild_OutboundPump()
-    local item = table.remove(RedGuild_OutboundQueue, 1)
+    local item = RedGuild_OutboundQueue[1]
     if not item then
         RedGuild_OutboundBusy = false
         return
     end
 
-    C_ChatInfo.SendAddonMessage(
-        REDGUILD_CHAT_PREFIX, item.msg, item.channel, item.target)
+    local sent = RedGuild_SendRaw(item.msg, item.channel, item.target)
 
-    C_Timer.After(REDGUILD_CHUNK_DELAY, RedGuild_OutboundPump)
+    if sent then
+        table.remove(RedGuild_OutboundQueue, 1)
+        C_Timer.After(REDGUILD_CHUNK_DELAY, RedGuild_OutboundPump)
+        return
+    end
+
+    item.retries = (item.retries or 0) + 1
+    if item.retries > REDGUILD_CHUNK_RETRY_MAX then
+        D("OUTBOUND DROP - throttled " .. item.retries .. " times in a row, giving up on one chunk")
+        table.remove(RedGuild_OutboundQueue, 1)
+        C_Timer.After(REDGUILD_CHUNK_DELAY, RedGuild_OutboundPump)
+        return
+    end
+
+    C_Timer.After(REDGUILD_CHUNK_DELAY * (1 + item.retries * 0.5), RedGuild_OutboundPump)
 end
 
 function RedGuild_QueueChunk(msg, channel, target)
@@ -507,7 +542,7 @@ end
 
 local function RedGuild_GetSyncChannel(msgType, target)
     -- Live bidding traffic: bidder -> auctioneer
-    if msgType == "BID_PLACE" or msgType == "BID_SYNCREQ" then
+    if msgType == "BID_PLACE" then
         if not target or target == "" then return nil, nil end
         return "WHISPER", GetExactName(target)
     end
@@ -583,6 +618,29 @@ local function RedGuild_GetSyncChannel(msgType, target)
     return "GUILD", nil
 end
 
+REDGUILD_SMALL_RETRY_MAX   = 3     -- throttled attempts before a small message is dropped
+REDGUILD_SMALL_RETRY_DELAY = 0.2   -- seconds before the first retry, growing each attempt
+
+-- Small (unchunked) messages skip the paced outbound queue - a bid or
+-- a pause/resume needs to land immediately, not queue up behind
+-- whatever big chunked transfer happens to be running - but they
+-- still deserve to know if the client actually managed to send them.
+-- On a throttle, retry a few times with a short, growing backoff
+-- instead of just assuming it went out.
+local function RedGuild_SendSmall(msg, channel, target, attempt)
+    attempt = attempt or 1
+    if RedGuild_SendRaw(msg, channel, target) then return end
+
+    if attempt >= REDGUILD_SMALL_RETRY_MAX then
+        D("SMALL SEND DROP - throttled " .. attempt .. " times: " .. msg)
+        return
+    end
+
+    C_Timer.After(REDGUILD_SMALL_RETRY_DELAY * attempt, function()
+        RedGuild_SendSmall(msg, channel, target, attempt + 1)
+    end)
+end
+
 function RedGuild_Send(msgType, payload, target)
     if not msgType then return end
 	
@@ -630,7 +688,7 @@ end
 
 	if not isChunked then
 		local msg = string.format("%s:%s:%s", REDGUILD_CHAT_PREFIX, msgType, payload)
-		C_ChatInfo.SendAddonMessage(REDGUILD_CHAT_PREFIX, msg, channel, actualTarget)
+		RedGuild_SendSmall(msg, channel, actualTarget)
 		return
 	end
 
