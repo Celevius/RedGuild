@@ -187,6 +187,33 @@ function RedGuild_Auction_DKPStale()
     return (tonumber(RedGuild_Config.dkpVersion or 0) or 0) < want
 end
 
+-- True while a DKP DATA transfer is actually being received right
+-- now - not just "our version happens to be behind", but chunks
+-- genuinely arriving. The one that matters here is the broadcast
+-- RedGuild_Auction_PushSyncAfterClose sends the moment the previous
+-- item's bidding closes; this only reports whether it (or any other
+-- DATA sync) is currently in flight.
+function RedGuild_Auction_SyncInProgress()
+    local bucket = REDGUILD_Inbound and REDGUILD_Inbound.DATA
+    if not bucket then return false end
+    return next(bucket) ~= nil
+end
+
+-- What the bid prompt's balance line should show: "syncing..." only
+-- while the table is genuinely stale AND a sync is actually incoming
+-- (from the previous item's close), for at most 10 seconds - past
+-- that, or once nothing is really coming, the real balance is shown
+-- even if it may still be out of date, rather than leaving the
+-- prompt stuck reading "syncing..." for the whole auction.
+function RedGuild_Auction_ShowSyncingBalance()
+    if not RedGuild_Auction_DKPStale() then return false end
+
+    local elapsed = GetTime() - (RedGuild_Auction.staleSince or GetTime())
+    if elapsed >= 10 then return false end
+
+    return RedGuild_Auction_SyncInProgress()
+end
+
 function RedGuild_Auction_IsOpen()
     return RedGuild_Auction.open == true
 end
@@ -520,6 +547,10 @@ function RedGuild_Auction_Start()
         AuctionPrint("Bidding is already being prepared.")
         return
     end
+    if RedGuild_Auction_SyncInProgress() then
+        AuctionPrint("A DKP sync from the last item is still coming in - wait for it to finish before starting a new bid.")
+        return
+    end
 
     local dur = AUCTION_DEFAULT_DURATION
     if auctionMaster and auctionMaster.durBox then
@@ -565,6 +596,7 @@ function RedGuild_Auction_Start()
         -- no version to be behind and the prompt never shows "syncing".
         RedGuild_Auction.dkpVersion = rollOnly and 0
             or (tonumber(RedGuild_Config.dkpVersion or 0) or 0)
+        RedGuild_Auction.staleSince = GetTime()
 
         RedGuild_Send("BID_START", EncodePayload({
             id         = RedGuild_Auction.id,
@@ -1055,6 +1087,7 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
         RedGuild_Auction.open     = true
         RedGuild_Auction.posted   = true
         RedGuild_Auction.dkpVersion = tonumber(data.dkpVersion or 0) or 0
+        RedGuild_Auction.staleSince = GetTime()
         AuctionResetBook()
         -- Set after the reset, which clears the award counter.
         RedGuild_Auction.qty      = math.max(1, tonumber(data.qty) or 1)
@@ -1571,10 +1604,13 @@ local function CreatePrompt()
         if self.acc < 0.2 then return end
         self.acc = 0
 
-        -- Read the balance every tick rather than once at open, and
-        -- show nothing at all until the sync lands. A number that is
-        -- known to be wrong is worse than no number: people bid off it.
-        if RedGuild_Auction_DKPStale() then
+        -- Read the balance every tick rather than once at open.
+        -- "syncing..." only while a table is genuinely stale AND a
+        -- sync is actually incoming, and only for the first 10
+        -- seconds - see RedGuild_Auction_ShowSyncingBalance. Past
+        -- that, or with nothing coming, showing the real (possibly
+        -- outdated) number beats leaving the prompt stuck forever.
+        if RedGuild_Auction_ShowSyncingBalance() then
             self.balText:SetText("Your DKP: |cffffff00syncing...|r")
         else
             self.balText:SetText(string.format("Your DKP: |cff00ff00%d|r",
@@ -1619,7 +1655,7 @@ function RedGuild_Auction_ShowPrompt()
     f.icon:SetTexture(
         (RedGuild_Auction.itemID and GetItemIcon(RedGuild_Auction.itemID))
         or "Interface\\Icons\\INV_Misc_QuestionMark")
-    if RedGuild_Auction_DKPStale() then
+    if RedGuild_Auction_ShowSyncingBalance() then
         f.balText:SetText("Your DKP: |cffffff00syncing...|r")
     else
         f.balText:SetText(string.format("Your DKP: |cff00ff00%d|r", bal))
