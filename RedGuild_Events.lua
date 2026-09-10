@@ -37,13 +37,20 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
 			end
 		end)
 
-		-- Patch Blizzard GuildUtil bug (formatString nil)
-		hooksecurefunc("GuildNewsButton_SetText", function(button, text, formatString)
-			if not formatString then
-				-- Prevent Blizzard's nil-index crash
-				return
+		-- Patch Blizzard's GuildUtil.lua bug: GuildNewsButton_SetText
+		-- indexes a nil formatString for certain guild news entries and
+		-- throws "attempt to index local 'formatString' (a nil value)",
+		-- spamming a Lua warning every time the Guild News list scrolls
+		-- or refreshes. hooksecurefunc can't prevent this - it only
+		-- runs AFTER the original, which has already errored by then -
+		-- so replace the function outright and swallow the error
+		-- instead of letting it propagate.
+		if type(GuildNewsButton_SetText) == "function" then
+			local original_GuildNewsButton_SetText = GuildNewsButton_SetText
+			GuildNewsButton_SetText = function(...)
+				pcall(original_GuildNewsButton_SetText, ...)
 			end
-		end)
+		end
 		
 		return
 	end
