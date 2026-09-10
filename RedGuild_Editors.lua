@@ -159,7 +159,7 @@ end)
 local bidSyncChk = CreateFrame("CheckButton", nil, editorsPanel, "ChatConfigCheckButtonTemplate")
 bidSyncChk:SetSize(18, 18)
 bidSyncChk:ClearAllPoints()
-bidSyncChk:SetPoint("TOP", hideSyncChk, "BOTTOM", 0, -8)
+bidSyncChk:SetPoint("BOTTOM", hideSyncChk, "TOP", 0, 8)
 
 local bidSyncLabel = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 bidSyncLabel:SetPoint("LEFT", bidSyncChk, "RIGHT", 4, 0)
