@@ -148,15 +148,15 @@ hideSyncChk:SetScript("OnClick", function(self)
 end)
 
 ------------------------------------------------------------
--- AUTO-SYNC AFTER BIDDING CLOSES CHECKBOX
+-- AUTO-SYNC AFTER ALL ITEMS AWARDED CHECKBOX
 ------------------------------------------------------------
 -- Controls RedGuild_Auction_PushSyncAfterClose: when you are running
--- an auction, closing bidding (whether by timer or the Stop button)
--- or handing out the last copy of the item broadcasts a fresh DKP
--- table to the guild, so everyone who just bid sees their new balance
--- without anyone having to remember to hit Force Sync. There is no
--- sync while bidding is still live - only once it is done. Unchecking
--- this turns it off on this client when you are the one auctioneering.
+-- an auction, handing out the last copy of the posted item broadcasts
+-- a fresh DKP table to the guild, so everyone who just bid sees their
+-- new balance without anyone having to remember to hit Force Sync.
+-- Bidding merely closing does not trigger this - nothing has actually
+-- changed until an award happens. Unchecking this turns it off on
+-- this client when you are the one auctioneering.
 local bidSyncChk = CreateFrame("CheckButton", nil, editorsPanel, "ChatConfigCheckButtonTemplate")
 bidSyncChk:SetSize(18, 18)
 bidSyncChk:ClearAllPoints()
@@ -164,7 +164,7 @@ bidSyncChk:SetPoint("BOTTOM", hideSyncChk, "TOP", 0, 8)
 
 local bidSyncLabel = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 bidSyncLabel:SetPoint("LEFT", bidSyncChk, "RIGHT", 4, 0)
-bidSyncLabel:SetText("Auto-sync after bidding closes")
+bidSyncLabel:SetText("Auto-sync after all items awarded")
 
 bidSyncChk:SetHitRectInsets(4, 4, 4, 4)
 

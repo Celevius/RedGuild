@@ -289,32 +289,18 @@ end
 -- Bid book
 --------------------------------------------------
 
--- Pushes a fresh full DKP broadcast once this item's auction is truly
--- done - either the bidding window closed (RedGuild_Auction_Stop,
--- whether by timer or the Stop button) or every copy has been handed
--- out (RedGuild_Auction_Award's final copy). Both call this, but it
--- only actually sends once per auction id within a short window, so
--- the common "close it, then immediately award the only copy" flow
--- doesn't fire the same full-table push twice back to back.
-local REDGUILD_AUCTION_SYNC_DEBOUNCE = 20
-
-function RedGuild_Auction_PushSyncAfterClose(reason)
+-- Pushes a fresh full DKP broadcast once every copy of the posted
+-- item has been awarded - called only from RedGuild_Auction_Award's
+-- final copy. Bidding merely closing (RedGuild_Auction_Stop) no
+-- longer triggers this: nothing has actually changed yet at that
+-- point, since DKP is only spent on award, so a push there was just
+-- traffic for no new data.
+function RedGuild_Auction_PushSyncAfterClose()
     if RedGuild_SyncLocked then return end
     if RedGuild_Config.bidSyncEnabled == false then return end
     if not RedGuild_Auction_IsAuctioneer() then return end
-    if not RedGuild_Auction.id then return end
 
-    local now = GetTime()
-    if RedGuild_Auction.lastAutoSyncID == RedGuild_Auction.id
-       and (now - (RedGuild_Auction.lastAutoSyncTime or 0)) < REDGUILD_AUCTION_SYNC_DEBOUNCE
-    then
-        D("AUCTION SYNC (" .. tostring(reason) .. ") skipped - already pushed for this auction")
-        return
-    end
-    RedGuild_Auction.lastAutoSyncID   = RedGuild_Auction.id
-    RedGuild_Auction.lastAutoSyncTime = now
-
-    D("AUCTION SYNC (" .. tostring(reason) .. ") - broadcasting current DKP table")
+    D("AUCTION SYNC (all copies awarded) - broadcasting current DKP table")
     local payload = BuildSyncPayload()
     local encoded = EncodePayload(payload)
     RedGuild_Send("DATA", encoded, "GUILD")
@@ -720,8 +706,6 @@ function RedGuild_Auction_Stop(auto)
             count, count == 1 and "" or "s",
             ((tonumber(RedGuild_Auction.qty) or 1) > 1)
                 and string.format(" %d copies still to award.", left) or ""))
-
-        RedGuild_Auction_PushSyncAfterClose("bidding closed")
     end
 
     RedGuild_Auction_RefreshMaster()
@@ -960,7 +944,7 @@ function RedGuild_Auction_Award(winner, cost)
     if auctionPrompt then auctionPrompt:Hide() end
     StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
 
-    RedGuild_Auction_PushSyncAfterClose("all copies awarded")
+    RedGuild_Auction_PushSyncAfterClose()
 
     AuctionPrint(string.format(
         "Awarded %s to %s for %d DKP.", link, winner, cost))
