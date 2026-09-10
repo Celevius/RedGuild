@@ -262,43 +262,35 @@ end
 -- Bid book
 --------------------------------------------------
 
--- Same payload as the broadcast, whispered to one player who asked for
--- it. Used when somebody joins late or missed the push: re-broadcasting
--- the whole table to the guild for one person is wasteful, and the
--- version dedupe would refuse to do it anyway.
-function RedGuild_Auction_PushSyncTo(target)
-    if not IsAuthorized() then return false end
-    if RedGuild_Config.hideMeFromSync then return false end
-    if not target or target == "" then return false end
+-- Pushes a fresh full DKP broadcast once this item's auction is truly
+-- done - either the bidding window closed (RedGuild_Auction_Stop,
+-- whether by timer or the Stop button) or every copy has been handed
+-- out (RedGuild_Auction_Award's final copy). Both call this, but it
+-- only actually sends once per auction id within a short window, so
+-- the common "close it, then immediately award the only copy" flow
+-- doesn't fire the same full-table push twice back to back.
+local REDGUILD_AUCTION_SYNC_DEBOUNCE = 20
 
+function RedGuild_Auction_PushSyncAfterClose(reason)
+    if RedGuild_SyncLocked then return end
+    if RedGuild_Config.bidSyncEnabled == false then return end
+    if not RedGuild_Auction_IsAuctioneer() then return end
+    if not RedGuild_Auction.id then return end
+
+    local now = GetTime()
+    if RedGuild_Auction.lastAutoSyncID == RedGuild_Auction.id
+       and (now - (RedGuild_Auction.lastAutoSyncTime or 0)) < REDGUILD_AUCTION_SYNC_DEBOUNCE
+    then
+        D("AUCTION SYNC (" .. tostring(reason) .. ") skipped - already pushed for this auction")
+        return
+    end
+    RedGuild_Auction.lastAutoSyncID   = RedGuild_Auction.id
+    RedGuild_Auction.lastAutoSyncTime = now
+
+    D("AUCTION SYNC (" .. tostring(reason) .. ") - broadcasting current DKP table")
     local payload = BuildSyncPayload()
-    payload.dkpVersion  = tonumber(RedGuild_Config.dkpVersion or 0)
-    payload.auctionSync = true
-
     local encoded = EncodePayload(payload)
-
-    RedGuild_OutboundSeq = RedGuild_OutboundSeq + 1
-    local seq   = RedGuild_OutboundSeq
-    local total = math.ceil(#encoded / REDGUILD_MAX_CHUNK)
-    if total == 0 then total = 1 end
-
-    local chunks = {}
-    for i = 1, total do
-        local startIdx = (i - 1) * REDGUILD_MAX_CHUNK + 1
-        chunks[i] = encoded:sub(startIdx, startIdx + REDGUILD_MAX_CHUNK - 1)
-    end
-
-    RedGuild_CacheOutbound(seq, "DATA", chunks)
-
-    for i = 1, total do
-        RedGuild_QueueChunk(
-            RedGuild_BuildChunkMsg("DATA", seq, i, total, chunks[i]),
-            "WHISPER", GetExactName(target))
-    end
-
-    D(string.format("Auction sync whispered to %s in %d chunks",
-        tostring(target), total))
-    return true
+    RedGuild_Send("DATA", encoded, "GUILD")
 end
 
 -- Wipes the book and everything that describes the item that was up.
@@ -573,7 +565,6 @@ function RedGuild_Auction_Start()
         -- no version to be behind and the prompt never shows "syncing".
         RedGuild_Auction.dkpVersion = rollOnly and 0
             or (tonumber(RedGuild_Config.dkpVersion or 0) or 0)
-        RedGuild_Auction.syncReqs   = {}
 
         RedGuild_Send("BID_START", EncodePayload({
             id         = RedGuild_Auction.id,
@@ -697,6 +688,8 @@ function RedGuild_Auction_Stop(auto)
             count, count == 1 and "" or "s",
             ((tonumber(RedGuild_Auction.qty) or 1) > 1)
                 and string.format(" %d copies still to award.", left) or ""))
+
+        RedGuild_Auction_PushSyncAfterClose("bidding closed")
     end
 
     RedGuild_Auction_RefreshMaster()
@@ -935,9 +928,10 @@ function RedGuild_Auction_Award(winner, cost)
     if auctionPrompt then auctionPrompt:Hide() end
     StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
 
+    RedGuild_Auction_PushSyncAfterClose("all copies awarded")
+
     AuctionPrint(string.format(
-        "Awarded %s to %s for %d DKP. Remember to broadcast/sync so everyone gets the new balances.",
-        link, winner, cost))
+        "Awarded %s to %s for %d DKP.", link, winner, cost))
 end
 
 --------------------------------------------------
@@ -1068,50 +1062,14 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
 
         RedGuild_Auction_ShowPrompt()
 
-        -- Still behind the version this item was posted under: the
-        -- push was missed or is mid-repair. The prompt shows the
-        -- balance as syncing and corrects itself the moment the data
-        -- lands; if it has not landed shortly, ask for it - unless
-        -- the "Auto-sync on stale bid" checkbox on the Editors tab is
-        -- off, in which case the balance just stays "syncing...".
-        if RedGuild_Config.bidSyncEnabled ~= false and RedGuild_Auction_DKPStale() then
-            D("BID_START ahead of local DKP version - waiting on sync")
-            C_Timer.After(3, function()
-                if RedGuild_Config.bidSyncEnabled ~= false
-                   and RedGuild_Auction_DKPStale() and RedGuild_Auction.posted then
-                    -- Straight to the auctioneer: a guild-wide REQUEST
-                    -- comes back as ordinary DATA, which this client
-                    -- would refuse if it is an editor.
-                    RedGuild_Send("BID_SYNCREQ", EncodePayload({
-                        id = RedGuild_Auction.id,
-                    }), RedGuild_Auction.ml)
-                end
-            end)
-        end
-        return
-    end
-
-    ----------------------------------------------------------------
-    if msgType == "BID_SYNCREQ" then
-        -- Somebody is bidding against a table older than the one this
-        -- item was posted under. Send them the current one directly -
-        -- unless this client has "Auto-sync on stale bid" off, in
-        -- which case no sync happens in either direction.
-        if RedGuild_Config.bidSyncEnabled == false then return end
-        if not RedGuild_Auction_IsAuctioneer() then return end
-        if data.id ~= RedGuild_Auction.id then return end
-        if not IsActiveGuildMember(sender) then return end
-
-        RedGuild_Auction.syncReqs = RedGuild_Auction.syncReqs or {}
-        local last = RedGuild_Auction.syncReqs[sender] or 0
-        if (GetTime() - last) < 30 then
-            D("BID_SYNCREQ from " .. sender .. " ignored - asked moments ago")
-            return
-        end
-        RedGuild_Auction.syncReqs[sender] = GetTime()
-
-        D("BID_SYNCREQ from " .. sender .. " - whispering the DKP table")
-        RedGuild_Auction_PushSyncTo(sender)
+        -- No proactive sync here anymore: a bidder behind the version
+        -- this item was posted under just shows "syncing..." on their
+        -- balance and lives with it for this one bid. Pinging the
+        -- auctioneer mid-bid for a fresh table added avoidable traffic
+        -- right when a raid is busiest; RedGuild_Auction_PushSyncAfterClose
+        -- (called once this item's bidding is actually done, from
+        -- RedGuild_Auction_Stop and RedGuild_Auction_Award) is what
+        -- catches everyone up now.
         return
     end
 

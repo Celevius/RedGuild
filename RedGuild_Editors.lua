@@ -148,14 +148,15 @@ hideSyncChk:SetScript("OnClick", function(self)
 end)
 
 ------------------------------------------------------------
--- AUTO-SYNC ON STALE BID CHECKBOX
+-- AUTO-SYNC AFTER BIDDING CLOSES CHECKBOX
 ------------------------------------------------------------
--- Controls the BID_SYNCREQ exchange: a bidder whose local DKP table
--- is older than the version an auction was posted under asks the
--- auctioneer for a fresh one, whispered, a few seconds after the
--- prompt opens. Unchecking this disables it in both directions on
--- this client - it won't ask when bidding, and won't answer such a
--- request when auctioneering.
+-- Controls RedGuild_Auction_PushSyncAfterClose: when you are running
+-- an auction, closing bidding (whether by timer or the Stop button)
+-- or handing out the last copy of the item broadcasts a fresh DKP
+-- table to the guild, so everyone who just bid sees their new balance
+-- without anyone having to remember to hit Force Sync. There is no
+-- sync while bidding is still live - only once it is done. Unchecking
+-- this turns it off on this client when you are the one auctioneering.
 local bidSyncChk = CreateFrame("CheckButton", nil, editorsPanel, "ChatConfigCheckButtonTemplate")
 bidSyncChk:SetSize(18, 18)
 bidSyncChk:ClearAllPoints()
@@ -163,7 +164,7 @@ bidSyncChk:SetPoint("BOTTOM", hideSyncChk, "TOP", 0, 8)
 
 local bidSyncLabel = editorsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 bidSyncLabel:SetPoint("LEFT", bidSyncChk, "RIGHT", 4, 0)
-bidSyncLabel:SetText("Auto-sync on stale bid")
+bidSyncLabel:SetText("Auto-sync after bidding closes")
 
 bidSyncChk:SetHitRectInsets(4, 4, 4, 4)
 
