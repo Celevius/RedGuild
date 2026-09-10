@@ -234,7 +234,7 @@ function ApplySyncData(sender, encoded)
     D("Sync applied successfully")
 end
 
-function HandleSyncRequest(requester, sender)
+function HandleSyncRequest(requester, sender, requesterVersion)
     EnsureSaved()
 
     requester = Ambiguate(requester or "", "short")
@@ -245,7 +245,7 @@ function HandleSyncRequest(requester, sender)
 
     if RedGuild_SyncLocked then return end
     if not IsAuthorized() then return end
-	
+
 	-- Block all outbound sync if user opted out
     if RedGuild_Config.hideMeFromSync then
         return
@@ -255,6 +255,16 @@ function HandleSyncRequest(requester, sender)
 		D("SYNC REQUEST → requester not in guild, ignoring")
     return
 	end
+
+    -- Requester already reported being at or ahead of our version -
+    -- no need to send the full table again. This is the common case
+    -- when several people request in quick succession right after one
+    -- of them just got synced.
+    requesterVersion = tonumber(requesterVersion)
+    if requesterVersion and requesterVersion >= (RedGuild_Config.dkpVersion or 0) then
+        D("SYNC REQUEST → " .. requester .. " already at version " .. requesterVersion .. ", skipping")
+        return
+    end
 
     local payload = BuildSyncPayload()
     local encoded = EncodePayload(payload)
@@ -345,6 +355,6 @@ function AttemptAutoSync()
     -- than every online editor, so a raid full of people logging in at
     -- once doesn't turn into several editors each whispering back a
     -- full DKP table to the same person at the same time.
-    RedGuild_Send("REQUEST", meReal, bestEditor)
+    RedGuild_Send("REQUEST", meReal .. "|" .. tostring(RedGuild_Config.dkpVersion or 0), bestEditor)
 end
 

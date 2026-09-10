@@ -424,9 +424,12 @@ if event == "CHAT_MSG_ADDON" then
         return
     end
 
-    -- REQUEST: payload = requester name
+    -- REQUEST: payload = "requesterName|requesterDkpVersion" (version is
+    -- optional for backward compatibility with older clients)
     if simpleType == "REQUEST" then
-        HandleSyncRequest(simplePayload ~= "" and simplePayload or sender, sender)
+        local reqName, reqVersion = simplePayload:match("^(.-)|(%d+)$")
+        reqName = reqName or (simplePayload ~= "" and simplePayload or sender)
+        HandleSyncRequest(reqName, sender, reqVersion)
         return
     end
 

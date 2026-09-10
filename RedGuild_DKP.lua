@@ -444,7 +444,7 @@ requestBtn:SetScript("OnClick", function()
                     return
                 end
 
-                RedGuild_Send("REQUEST", meReal, bestEditor)
+                RedGuild_Send("REQUEST", meReal .. "|" .. tostring(RedGuild_Config.dkpVersion or 0), bestEditor)
             end,
             timeout = 0,
             whileDead = true,
@@ -488,7 +488,7 @@ requestBtn:SetScript("OnClick", function()
         return
     end
 
-    RedGuild_Send("REQUEST", meReal, bestEditor)
+    RedGuild_Send("REQUEST", meReal .. "|" .. tostring(RedGuild_Config.dkpVersion or 0), bestEditor)
 end)
 
         local forceBtn = CreateFrame("Button", nil, dkpPanel, "UIPanelButtonTemplate")
