@@ -11,7 +11,7 @@ RedGuild_Audit  	= RedGuild_Audit  or {}
 RedGuild_Usage  	= RedGuild_Usage  or {}
 
 addonName      = ...
-REDGUILD_VERSION = "2.2.69"
+REDGUILD_VERSION = "3.1.69b"
 
 REDGUILD_CHAT_PREFIX = "REDGUILD"
 
