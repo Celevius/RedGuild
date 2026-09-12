@@ -404,6 +404,14 @@ function RedGuild_Auction_SortedBids()
                 return (a.roll or 0) > (b.roll or 0)
             end
         end
+        -- On a roll-only item, main-spec is a "need" roll too, not a
+        -- DKP amount - amount is always 0 for every bidder, so the
+        -- tiebreaker that actually matters is the roll itself.
+        if RedGuild_Auction.rollOnly and a.mode == "MS" and b.mode == "MS" then
+            if (a.roll or 0) ~= (b.roll or 0) then
+                return (a.roll or 0) > (b.roll or 0)
+            end
+        end
         if (a.amount or 0) ~= (b.amount or 0) then
             return (a.amount or 0) > (b.amount or 0)
         end
@@ -430,16 +438,17 @@ function RedGuild_Auction_RecordBid(player, amount, mode, src, roll)
     mode   = mode or "MS"
     amount = tonumber(amount) or 0
 
-    -- A roll-only item has no DKP side at all, so a main-spec bid that
-    -- slips through is taken as a roll rather than thrown away. Every
-    -- caller explains this to whoever sent it.
-    if RedGuild_Auction.rollOnly and mode == "MS" then mode = "OS" end
+    -- A roll-only item has no DKP side at all: main spec ("need") and
+    -- off spec ("greed") are both dice rolls there, never a DKP bid,
+    -- so mode is kept as given (not coerced to OS) and no amount ever
+    -- survives. Off spec elsewhere is decided purely by the roll too.
+    if RedGuild_Auction.rollOnly then
+        amount = 0
+    elseif mode ~= "MS" then
+        amount = 0
+    end
 
-    -- Off spec is decided purely by the roll and costs nothing, so
-    -- neither off spec nor a pass ever carries a DKP amount.
-    if mode ~= "MS" then amount = 0 end
-
-    if mode == "MS" then
+    if mode == "MS" and not RedGuild_Auction.rollOnly then
         if amount < AUCTION_MIN_BID then
             return false, string.format(
                 "Main-spec bids must be at least %d DKP.", AUCTION_MIN_BID)
@@ -968,6 +977,10 @@ function RedGuild_Auction_Award(winner, cost)
             AuctionWarn(string.format(
                 "%s%s awarded to %s. No DKP charged.", link, suffix, winner))
         end
+    elseif RedGuild_Auction.rollOnly and mode == "MS" and roll then
+        AuctionWarn(string.format(
+            "%s%s awarded to %s on a roll of %d. No DKP charged.",
+            link, suffix, winner, roll))
     elseif cost > 0 then
         AuctionWarn(string.format("%s%s awarded to %s for %d DKP (main spec).",
             link, suffix, winner, cost))
@@ -1029,18 +1042,19 @@ function RedGuild_Auction_SendBid(amount, mode)
 
     mode   = mode or "MS"
     amount = tonumber(amount) or 0
-    if mode ~= "MS" then amount = 0 end
 
-    -- Nothing to bid on a roll-only item: the window does not offer a
-    -- bid box, so this only fires from a stale prompt or a macro.
-    if RedGuild_Auction.rollOnly and mode == "MS" then
-        AuctionPrint("This item is roll only - use Roll, it costs no DKP.")
-        return
+    -- A roll-only item has no DKP side at all: both Roll MS ("need")
+    -- and Roll OS ("greed") are dice rolls, not bids, so mode is kept
+    -- as given rather than blocked or coerced.
+    if RedGuild_Auction.rollOnly then
+        amount = 0
+    elseif mode ~= "MS" then
+        amount = 0
     end
 
     local bal = RedGuild_Auction_GetBalance(UnitName("player"))
 
-    if mode == "MS" then
+    if mode == "MS" and not RedGuild_Auction.rollOnly then
         if amount < AUCTION_MIN_BID then
             AuctionPrint(string.format(
                 "Minimum bid is %d DKP. Off spec is the roll button, not a bid.",
@@ -1079,20 +1093,27 @@ function RedGuild_Auction_SendBid(amount, mode)
         src    = "addon",
     }
 
-    if mode == "OS" then
+    if mode == "PASS" then
+        AuctionPrint("You passed.")
+    elseif RedGuild_Auction.rollOnly then
         -- A real Blizzard roll so the whole raid can see it and the
         -- auctioneer can verify it. The system message is picked up
-        -- on the editor's client and attached to this bid.
+        -- on the editor's client and attached to this bid. Roll MS is
+        -- a normal 1-100 "need" roll; Roll OS stays the usual 1-69.
+        RandomRoll(1, mode == "MS" and 100 or 69)
+        if late then
+            AuctionPrint("Bidding has closed - your roll was sent as LATE and may not be considered.")
+        else
+            AuctionPrint(string.format("%s roll sent. This item costs no DKP.",
+                mode == "MS" and "Need (1-100)" or "Offspec (1-69)"))
+        end
+    elseif mode == "OS" then
         RandomRoll(1, 69)
         if late then
             AuctionPrint("Bidding has closed - your roll was sent as LATE and may not be considered.")
-        elseif RedGuild_Auction.rollOnly then
-            AuctionPrint("Roll sent. This item costs no DKP.")
         else
             AuctionPrint("Off spec roll sent. It costs no DKP if you win it.")
         end
-    elseif mode == "PASS" then
-        AuctionPrint("You passed.")
     else
         if late then
             AuctionPrint(string.format(
@@ -1423,8 +1444,22 @@ function RedGuild_Auction_OnSystemMessage(text)
 
     local who, roll, low, high = text:match(RedGuild_RollPattern)
     if not who or not roll then return end
-    if tonumber(low) ~= 1 or tonumber(high) ~= 69 then
-        AuctionWhisper(who, "RedGuild: only /roll 69 (1-69) counts. Please roll again.")
+
+    local lowNum, highNum = tonumber(low), tonumber(high)
+
+    -- On a roll-only item, either a 1-100 "need" roll (mode MS) or the
+    -- usual 1-69 "offspec" roll (mode OS) counts. Everywhere else,
+    -- only the 1-69 off-spec roll does - main spec is a DKP bid there,
+    -- never a dice roll.
+    local expectMode
+    if lowNum == 1 and highNum == 69 then
+        expectMode = "OS"
+    elseif RedGuild_Auction.rollOnly and lowNum == 1 and highNum == 100 then
+        expectMode = "MS"
+    else
+        AuctionWhisper(who, RedGuild_Auction.rollOnly
+            and "RedGuild: only /roll 100 (need) or /roll 69 (offspec) count. Please roll again."
+            or "RedGuild: only /roll 69 (1-69) counts. Please roll again.")
         return
     end
 
@@ -1432,8 +1467,11 @@ function RedGuild_Auction_OnSystemMessage(text)
     local bid = RedGuild_Auction.bids[who]
 
     if bid then
-        -- Main-spec bidders are not converted by rolling.
-        if bid.mode ~= "OS" then return end
+        -- A registered bid only accepts a roll matching the mode it
+        -- was placed under - a DKP main-spec bidder is never converted
+        -- by rolling, and an off-spec roller's number never counts
+        -- for a need roll or vice versa.
+        if bid.mode ~= expectMode then return end
 
         -- Only the first roll counts. Later ones are ignored, and
         -- the roller is told once so they are not left thinking a
@@ -1454,9 +1492,10 @@ function RedGuild_Auction_OnSystemMessage(text)
         bid.roll = tonumber(roll)
         RedGuild_Auction_RefreshMaster()
     else
-        -- Someone rolled without registering. Treat as an off-spec roll
-        -- so people who just /roll are not silently dropped.
-        RedGuild_Auction_RecordBid(who, 0, "OS", "roll", tonumber(roll))
+        -- Someone rolled without registering. Treat it as a bid under
+        -- whichever mode its roll range matches, so people who just
+        -- /roll are not silently dropped.
+        RedGuild_Auction_RecordBid(who, 0, expectMode, "roll", tonumber(roll))
     end
 end
 
@@ -1500,7 +1539,7 @@ local function PromptRuleText()
     end
 
     if RedGuild_Auction.rollOnly then
-        table.insert(parts, "|cff55ccffRoll only|r - no DKP is charged for this item.")
+        table.insert(parts, "|cff55ccffRoll only|r - no DKP is charged. Roll MS is a normal 1-100 roll, Roll OS is 1-69.")
     end
 
     local qty = tonumber(RedGuild_Auction.qty) or 1
@@ -1608,7 +1647,13 @@ local function CreatePrompt()
     f.bidBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 16, 44)
     f.bidBtn:SetText("|TInterface\\Icons\\INV_Misc_Coin_01:14:14:0:0|t Bid")
     f.bidBtn:SetScript("OnClick", function()
-        RedGuild_Auction_SendBid(f.amountBox:GetNumber(), "MS")
+        -- Doubles as "Roll MS" (a 1-100 need roll) on a roll-only
+        -- item, where there is no amount to read from the bid box.
+        if RedGuild_Auction.rollOnly then
+            RedGuild_Auction_SendBid(0, "MS")
+        else
+            RedGuild_Auction_SendBid(f.amountBox:GetNumber(), "MS")
+        end
     end)
 
     f.osBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
@@ -1725,23 +1770,24 @@ function RedGuild_Auction_ShowPrompt()
     f.amountBox:SetText("")
     f.ruleText:SetText(PromptRuleText())
 
-    -- A roll-only item has no DKP side, so the bid box and Bid button
-    -- are taken away entirely rather than left there to be typed into,
-    -- and the roll button moves to the middle where Bid used to sit.
+    -- A roll-only item has no DKP side, so the bid box goes away and
+    -- Bid itself becomes Roll MS (a normal 1-100 need roll) sitting
+    -- right where Bid used to, alongside Roll OS (still 1-69) - both
+    -- buttons stay in their usual spots either way.
+    f.bidBtn:ClearAllPoints()
+    f.bidBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 16, 44)
+    f.osBtn:ClearAllPoints()
+    f.osBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -16, 44)
+    f.osBtn:SetText("|TInterface\\Buttons\\UI-GroupLoot-Dice-Up:16:16:0:0|t Roll OS")
+
     if RedGuild_Auction.rollOnly then
         f.bidLabel:Hide()
         f.amountBox:Hide()
-        f.bidBtn:Hide()
-        f.osBtn:ClearAllPoints()
-        f.osBtn:SetPoint("BOTTOM", f, "BOTTOM", 0, 44)
-        f.osBtn:SetText("|TInterface\\Buttons\\UI-GroupLoot-Dice-Up:16:16:0:0|t Roll")
+        f.bidBtn:SetText("|TInterface\\Buttons\\UI-GroupLoot-Dice-Up:16:16:0:0|t Roll MS")
     else
         f.bidLabel:Show()
         f.amountBox:Show()
-        f.bidBtn:Show()
-        f.osBtn:ClearAllPoints()
-        f.osBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -16, 44)
-        f.osBtn:SetText("|TInterface\\Buttons\\UI-GroupLoot-Dice-Up:16:16:0:0|t Roll OS")
+        f.bidBtn:SetText("|TInterface\\Icons\\INV_Misc_Coin_01:14:14:0:0|t Bid")
     end
 
     -- Set immediately rather than waiting for the first OnUpdate tick,
@@ -2418,10 +2464,12 @@ function RedGuild_Auction_RefreshMaster()
 
         row.nameText:SetText(ClassColour(b.name) .. b.name .. "|r")
 
-        if b.mode == "MS" then
+        if b.mode == "MS" and not RedGuild_Auction.rollOnly then
             row.bidText:SetText(tostring(b.amount or 0))
         else
-            -- Off spec and passes cost nothing, so there is no figure.
+            -- Off spec, passes, and any roll on a roll-only item cost
+            -- nothing, so there is no DKP figure - the roll column
+            -- carries the number that actually matters instead.
             row.bidText:SetText("|cff888888-|r")
         end
 
