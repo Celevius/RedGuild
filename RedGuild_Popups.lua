@@ -311,6 +311,21 @@ StaticPopupDialogs["REDGUILD_NEW_WEEK"] = {
 				d.balance = 0
 			end
 
+			-- Credit the session that is closing, before the fields
+			-- that decide it are wiped below. Anyone who earned
+			-- On-Time, Attendance or spent DKP took part in it;
+			-- anyone left holding Bench DKP sat it out.
+			if (tonumber(d.onTime) or 0) > 0
+			   or (tonumber(d.attendance) or 0) > 0
+			   or (tonumber(d.spent) or 0) > 0
+			then
+				RedGuild_BumpAttendance(d)
+			end
+
+			if (tonumber(d.bench) or 0) > 0 then
+				RedGuild_BumpBenched(d)
+			end
+
 			-- Reset weekly fields
 			d.onTime     = 0
 			d.attendance = 0

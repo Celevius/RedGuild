@@ -40,7 +40,7 @@ function RedGuild_UpdateEditorTabVisibility()
     if not tabs[TAB_BIDLOG] then return end   -- CreateUI hasn't run yet
 
     local editor = IsEditor(UnitName("player"))
-    for _, idx in ipairs({ TAB_BIDLOG, TAB_RAID, TAB_EDITORS, TAB_AUDIT }) do
+    for _, idx in ipairs({ TAB_BIDLOG, TAB_RAID, TAB_EDITORS, TAB_AUDIT, TAB_ATTEND }) do
         local tab = tabs[idx]
         if tab then
             if editor then tab:Show() else tab:Hide() end
@@ -77,6 +77,7 @@ function ShowTab(id)
     editorsPanel:Hide()
     auditPanel:Hide()
 	if bidLogPanel then bidLogPanel:Hide() end
+	if attendancePanel then attendancePanel:Hide() end
 
     if id == TAB_DKP then
         dkpPanel:Show()
@@ -97,6 +98,11 @@ function ShowTab(id)
             bidLogPanel:Show()
             RedGuild_BidLog_Refresh()
         end
+    elseif id == TAB_ATTEND then
+        if attendancePanel then
+            attendancePanel:Show()
+            RedGuild_RefreshAttendanceTable()
+        end
     end
 end
 
@@ -111,8 +117,6 @@ headers = {
     { text = "Spent",      width = 55  },
     { text = "Live Bal",   width = 65  },
 	{ text = "Rotated",  width = 55  },
-    { text = "Attend",     width = 45  },
-    { text = "Last Raid",  width = 80  },
 }
 
 fieldMap = {
@@ -126,8 +130,6 @@ fieldMap = {
     [8] = "spent",
     [9] = "balance",
     [10] = "rotated",
-	[11] = "raidsAttended",
-	[12] = "lastAttendance",
 }
 
 -- Class → Spec list (Blizzard internal spec names)
@@ -471,19 +473,6 @@ function CreateDKPRow()
                 end
             end)
 
-        elseif field == "raidsAttended" or field == "lastAttendance" then
-            -- Editors only (see UpdateTable): how many raids this
-            -- player has been credited for, and the date of the most
-            -- recent one - onTime, attendance, or spending DKP on a
-            -- won item all count, deduplicated per calendar day
-            -- (RedGuild_BumpAttendance). Plain display, not editable -
-            -- this is a tracked stat, not something to hand-type over.
-            col = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            col:SetPoint("LEFT", row, "LEFT", colX, 0)
-            col:SetWidth(h.width)
-            col:SetJustifyH("LEFT")
-            col:EnableMouse(false)
-
         elseif field == "balance" then
             col = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
             col:SetPoint("LEFT", row, "LEFT", colX, 0)
@@ -825,7 +814,6 @@ function UpdateTable()
 			d.spent      = d.spent      or 0
 			d.rotated    = d.rotated    or 0
 			d.balance    = d.balance    or 0
-			d.raidsAttended = d.raidsAttended or 0
 			
 			----------------------------------------------------------------
 			-- CAP LAST WEEK AT 300
@@ -916,15 +904,6 @@ function UpdateTable()
             row.cols[8]:SetText(d.spent or 0)
             row.cols[9]:SetText(ColorizeBalance(d))
             row.cols[10]:SetText(tonumber(d.rotated) or 0)
-
-            -- Editors only - see RedGuild_BumpAttendance.
-            if IsAuthorized() then
-                row.cols[11]:SetText(tostring(tonumber(d.raidsAttended) or 0))
-                row.cols[12]:SetText(d.lastAttendance or "Never")
-            else
-                row.cols[11]:SetText("")
-                row.cols[12]:SetText("")
-            end
 
         else
             row:Hide()

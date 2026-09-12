@@ -152,13 +152,15 @@ function ApplyDKPSnapshot(snapshot)
             d.balance    = tonumber(src.balance)    or 0
             d.rotated    = tonumber(src.rotated)    or 0
 
-            -- Lifetime attendance tracking, not a per-session value -
-            -- unlike onTime/attendance/spent it is never wiped by a
-            -- New Week reset, so a sync from a client that predates
-            -- this field (nil src.raidsAttended) must keep whatever
+            -- Lifetime attendance/bench tracking, not per-session
+            -- values - unlike onTime/attendance/spent they are never
+            -- wiped by a New Week reset, so a sync from a client that
+            -- predates these fields (nil in src) must keep whatever
             -- this client already has instead of resetting it to 0.
             d.raidsAttended  = tonumber(src.raidsAttended) or d.raidsAttended or 0
             d.lastAttendance = src.lastAttendance or d.lastAttendance
+            d.benched        = tonumber(src.benched) or d.benched or 0
+            d.lastBenched    = src.lastBenched or d.lastBenched
 
             -- DKP‑table identity fields
             d.class  = src.class  or d.class

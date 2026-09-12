@@ -45,6 +45,7 @@ TAB_BIDLOG  = 5
 TAB_RAID    = 6
 TAB_EDITORS = 7
 TAB_AUDIT   = 8
+TAB_ATTEND  = 9
 
 activeTab = TAB_DKP
 dkpLocked = true
@@ -753,6 +754,7 @@ function EnsurePlayer(name)
         spent          = 0,
         rotated        = 0,
         raidsAttended  = 0,
+        benched        = 0,
     }
 
     RedGuild_Data[name] = d
@@ -775,9 +777,12 @@ function BumpDKPVersion()
     RedGuild_Config.dkpVersion = (RedGuild_Config.dkpVersion or 0) + 1
 end
 
--- Marks one more raid attended, editor-only visible on the DKP tab.
--- Called wherever a player actually gets credit for being in the
--- raid: On-Time DKP, Attendance DKP, or spending DKP on a won item.
+-- Marks one more raid attended, shown on the editor-only Attendance
+-- tab. Called wherever a player actually gets credit for being in the
+-- raid: On-Time DKP, Attendance DKP, spending DKP on a won item, and
+-- again at a new DKP session for anyone who ended the session with any
+-- of those above zero (which also catches values typed straight into
+-- the DKP table rather than allocated through a popup).
 -- De-duplicated by calendar day, not by call site - On-Time and
 -- Attendance are normally allocated together at the end of the same
 -- raid, and an item won that night adds a third call, none of which
@@ -788,6 +793,19 @@ function RedGuild_BumpAttendance(d)
     if d.lastAttendance ~= today then
         d.raidsAttended  = (tonumber(d.raidsAttended) or 0) + 1
         d.lastAttendance = today
+    end
+end
+
+-- The bench equivalent, and deliberately only ever called at a new DKP
+-- session (RedGuild_Popups.lua), for anyone holding Bench DKP as that
+-- session closes. Sitting out is a whole-session state, not a moment
+-- in one - allocating Bench DKP mid-week does not count on its own.
+function RedGuild_BumpBenched(d)
+    if not d then return end
+    local today = date("%Y-%m-%d")
+    if d.lastBenched ~= today then
+        d.benched     = (tonumber(d.benched) or 0) + 1
+        d.lastBenched = today
     end
 end
 

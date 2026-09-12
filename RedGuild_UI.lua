@@ -3,10 +3,7 @@ function CreateUI()
     -- MAIN FRAME
     --------------------------------------------------------------------
     mainFrame = CreateFrame("Frame", "RedGuildFrame", UIParent, "BasicFrameTemplateWithInset")
-    -- 950 rather than 800: the DKP tab's columns (with Attend and
-    -- Last Raid added) need the extra width to all fit without
-    -- overflowing the scroll frame.
-    mainFrame:SetSize(950, 500)
+    mainFrame:SetSize(800, 500)
     mainFrame:SetPoint("CENTER")
     mainFrame:Hide()
 	mainFrame:SetFrameLevel(666)
@@ -130,6 +127,7 @@ end)
     CreateTab(TAB_RAID, "RL Tools")
     CreateTab(TAB_EDITORS, "Editors")
     CreateTab(TAB_AUDIT,   "Audit Log")
+    CreateTab(TAB_ATTEND,  "Attendance")
     RedGuild_UpdateEditorTabVisibility()   -- also calls RealignTabs()
     --------------------------------------------------------------------
     -- PANELS
@@ -144,6 +142,7 @@ end)
     editorsPanel = CreateFrame("Frame", nil, mainFrame); LayoutPanel(editorsPanel)
     auditPanel   = CreateFrame("Frame", nil, mainFrame); LayoutPanel(auditPanel)
     bidLogPanel  = CreateFrame("Frame", nil, mainFrame); LayoutPanel(bidLogPanel)
+    attendancePanel = CreateFrame("Frame", nil, mainFrame); LayoutPanel(attendancePanel)
 	
     CreateAltTab()
     CreateGroupTab()
@@ -151,6 +150,7 @@ end)
     CreateRaidTab()
     CreateEditorsTab()
     CreateAuditTab()
+    CreateAttendanceTab()
     CreateDKPTab()
     --------------------------------------------------------------------
     -- FINALIZE

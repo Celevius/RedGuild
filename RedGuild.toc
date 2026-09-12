@@ -33,6 +33,7 @@ RedGuild_ML.lua
 RedGuild_Raid.lua
 RedGuild_Editors.lua
 RedGuild_Audit.lua
+RedGuild_Attendance.lua
 RedGuild_Sync.lua
 RedGuild_Popups.lua
 RedGuild_Events.lua
