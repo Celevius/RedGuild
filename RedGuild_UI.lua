@@ -3,7 +3,10 @@ function CreateUI()
     -- MAIN FRAME
     --------------------------------------------------------------------
     mainFrame = CreateFrame("Frame", "RedGuildFrame", UIParent, "BasicFrameTemplateWithInset")
-    mainFrame:SetSize(800, 500)
+    -- 950 rather than 800: the DKP tab's columns (with Attend and
+    -- Last Raid added) need the extra width to all fit without
+    -- overflowing the scroll frame.
+    mainFrame:SetSize(950, 500)
     mainFrame:SetPoint("CENTER")
     mainFrame:Hide()
 	mainFrame:SetFrameLevel(666)

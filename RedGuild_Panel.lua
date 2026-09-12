@@ -112,6 +112,7 @@ headers = {
     { text = "Live Bal",   width = 65  },
 	{ text = "Rotated",  width = 55  },
     { text = "Attend",     width = 45  },
+    { text = "Last Raid",  width = 80  },
 }
 
 fieldMap = {
@@ -126,6 +127,7 @@ fieldMap = {
     [9] = "balance",
     [10] = "rotated",
 	[11] = "raidsAttended",
+	[12] = "lastAttendance",
 }
 
 -- Class → Spec list (Blizzard internal spec names)
@@ -469,34 +471,18 @@ function CreateDKPRow()
                 end
             end)
 
-        elseif field == "raidsAttended" then
+        elseif field == "raidsAttended" or field == "lastAttendance" then
             -- Editors only (see UpdateTable): how many raids this
-            -- player has been credited for - onTime, attendance, or
-            -- spending DKP on a won item all count, deduplicated per
-            -- calendar day (RedGuild_BumpAttendance). The date of the
-            -- most recent one is a tooltip rather than its own column,
-            -- to fit in the same space the old Tell button used.
-            col = CreateFrame("Button", nil, row)
+            -- player has been credited for, and the date of the most
+            -- recent one - onTime, attendance, or spending DKP on a
+            -- won item all count, deduplicated per calendar day
+            -- (RedGuild_BumpAttendance). Plain display, not editable -
+            -- this is a tracked stat, not something to hand-type over.
+            col = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
             col:SetPoint("LEFT", row, "LEFT", colX, 0)
-            col:SetSize(h.width, ROW_HEIGHT)
-
-            local fs = col:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            fs:SetAllPoints(col)
-            fs:SetJustifyH("LEFT")
-            col:SetFontString(fs)
-
-            col:SetScript("OnEnter", function(self)
-                if not IsAuthorized() then return end
-                local player = row.name
-                local d = player and RedGuild_Data[player]
-                if not d then return end
-
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                GameTooltip:AddLine("Raids attended: " .. tostring(d.raidsAttended or 0))
-                GameTooltip:AddLine("Last attended: " .. (d.lastAttendance or "Never"), 1, 1, 1)
-                GameTooltip:Show()
-            end)
-            col:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            col:SetWidth(h.width)
+            col:SetJustifyH("LEFT")
+            col:EnableMouse(false)
 
         elseif field == "balance" then
             col = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -934,8 +920,10 @@ function UpdateTable()
             -- Editors only - see RedGuild_BumpAttendance.
             if IsAuthorized() then
                 row.cols[11]:SetText(tostring(tonumber(d.raidsAttended) or 0))
+                row.cols[12]:SetText(d.lastAttendance or "Never")
             else
                 row.cols[11]:SetText("")
+                row.cols[12]:SetText("")
             end
 
         else
