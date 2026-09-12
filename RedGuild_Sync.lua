@@ -166,8 +166,37 @@ end
     end
 end
 
+-- Applies an incoming DKP table over the local one.
+--
+-- Two rules here exist because this function is the only thing in the
+-- addon that can destroy DKP wholesale, and it runs unattended on
+-- whatever arrives over the wire:
+--
+--  1. A missing field means "no information", never zero. The wire
+--     format is a reassembled chunk stream; a record that arrives
+--     short used to silently set that player's DKP to 0, which is
+--     indistinguishable from an editor having zeroed them on purpose.
+--     Keep what we already had instead.
+--
+--  2. A snapshot with no usable records is refused outright. The
+--     delete pass below removes everybody the snapshot does not
+--     mention, so an empty or unparsable-but-still-a-table payload
+--     used to wipe the entire roster in one go, with nothing said.
 function ApplyDKPSnapshot(snapshot)
     if type(snapshot) ~= "table" then return end
+
+    local incoming = 0
+    for name, src in pairs(snapshot) do
+        if type(name) == "string" and type(src) == "table" then
+            incoming = incoming + 1
+        end
+    end
+
+    if incoming == 0 then
+        Print("|cffff5555Ignored a DKP sync containing no players - "
+            .. "your table has been left alone.|r")
+        return
+    end
 
     local seen = {}
 
@@ -175,13 +204,14 @@ function ApplyDKPSnapshot(snapshot)
         if type(name) == "string" and type(src) == "table" then
             local d = EnsurePlayer(name)
 
-            -- DKP fields
-            d.lastWeek   = tonumber(src.lastWeek)   or 0
-            d.onTime     = tonumber(src.onTime)     or 0
-            d.attendance = tonumber(src.attendance) or 0
-            d.bench      = tonumber(src.bench)      or 0
-            d.spent      = tonumber(src.spent)      or 0
-            d.balance    = tonumber(src.balance)    or 0
+            -- DKP fields. Falling back to the value already held, not
+            -- to 0: see rule 1 above.
+            d.lastWeek   = tonumber(src.lastWeek)   or tonumber(d.lastWeek)   or 0
+            d.onTime     = tonumber(src.onTime)     or tonumber(d.onTime)     or 0
+            d.attendance = tonumber(src.attendance) or tonumber(d.attendance) or 0
+            d.bench      = tonumber(src.bench)      or tonumber(d.bench)      or 0
+            d.spent      = tonumber(src.spent)      or tonumber(d.spent)      or 0
+            d.balance    = tonumber(src.balance)    or tonumber(d.balance)    or 0
 
             -- Attendance/bench counters are deliberately NOT touched
             -- here. They are editor-only bookkeeping that never rides
@@ -199,11 +229,26 @@ function ApplyDKPSnapshot(snapshot)
         end
     end
 
-    --Remove players not present in snapshot
+    -- Remove players not present in the snapshot. This is intended -
+    -- a sync is an authoritative full-table replace - but it is also
+    -- the one place DKP records disappear without anybody asking, so
+    -- say how many went rather than doing it silently.
+    local removed = {}
     for name in pairs(RedGuild_Data) do
         if not seen[name] then
-            RedGuild_Data[name] = nil
+            table.insert(removed, name)
         end
+    end
+
+    for _, name in ipairs(removed) do
+        RedGuild_Data[name] = nil
+    end
+
+    if #removed > 0 then
+        table.sort(removed)
+        Print(string.format(
+            "|cffffff00DKP sync removed %d player(s) not in the sender's table: %s|r",
+            #removed, table.concat(removed, ", ")))
     end
 end
 

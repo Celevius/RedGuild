@@ -69,6 +69,11 @@ function ShowTab(id)
         end
     end
 
+    -- Before anything is hidden: an open DKP cell edit must not be
+    -- carried across to another tab, where losing focus would commit
+    -- it (see RedGuild_CancelDKPInlineEdit).
+    if RedGuild_CancelDKPInlineEdit then RedGuild_CancelDKPInlineEdit() end
+
     dkpPanel:Hide()
 	altPanel:Hide()
     groupPanel:Hide()
