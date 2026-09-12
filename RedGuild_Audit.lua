@@ -29,13 +29,23 @@ local AUDIT_FIELD_LABELS = {
     lastBenched    = "Last Benched",
 }
 
+-- Sized to fill the panel rather than to the longest plausible value:
+-- the widest entries here are free text ("moved 144 (from balance +
+-- attendance)") and item links, which no sane column width fits. The
+-- columns take the space that is actually there - roughly 180px of it
+-- was sitting unused to the right of the table - and the row tooltip
+-- (see CreateAuditRow) carries whatever still does not fit.
+--
+-- Everything is left-justified. From/To were right-justified, which
+-- suits a column of numbers but reads badly for the sentences that
+-- actually dominate this log.
 local AUDIT_COLS = {
-    { text = "When",    width = 88 },
-    { text = "Editor",  width = 90 },
-    { text = "Player",  width = 90 },
-    { text = "Change",  width = 100 },
-    { text = "From",    width = 85, justify = "RIGHT" },
-    { text = "To",      width = 85, justify = "RIGHT" },
+    { text = "When",    width = 72 },
+    { text = "Editor",  width = 80 },
+    { text = "Player",  width = 92 },
+    { text = "Change",  width = 122 },
+    { text = "From",    width = 160 },
+    { text = "To",      width = 144 },
 }
 
 local AUDIT_COL_GAP   = 6
@@ -44,6 +54,10 @@ for i, c in ipairs(AUDIT_COLS) do
     AUDIT_ROW_WIDTH = AUDIT_ROW_WIDTH + c.width
     if i < #AUDIT_COLS then AUDIT_ROW_WIDTH = AUDIT_ROW_WIDTH + AUDIT_COL_GAP end
 end
+
+-- Exposed so a test can assert the table still fits the panel if
+-- somebody widens a column or adds one.
+REDGUILD_AUDIT_ROW_WIDTH = AUDIT_ROW_WIDTH
 
 local auditContent
 local auditFilterBox
@@ -98,6 +112,30 @@ local function AuditValueText(v, field)
     return tostring(v)
 end
 
+-- Hover handler, kept out of CreateAuditRow so it is one shared
+-- function rather than a closure per row - there can be thousands.
+function RedGuild_Audit_ShowRowTooltip(row)
+    local e = row and row.entry
+    if not e then return end
+
+    GameTooltip:SetOwner(row, "ANCHOR_CURSOR")
+    GameTooltip:AddLine(e.name or "?", 1, 1, 1)
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddDoubleLine("When",   e.time or "?",   0.7, 0.7, 0.7, 1, 1, 1)
+    GameTooltip:AddDoubleLine("Editor", e.editor or "?", 0.7, 0.7, 0.7, 1, 1, 1)
+    GameTooltip:AddDoubleLine("Change", RedGuild_Audit_FieldLabel(e.field),
+                                                         0.7, 0.7, 0.7, 1, 1, 1)
+    GameTooltip:AddLine(" ")
+    -- Wrapped rather than double-lined: these are the two that
+    -- overflow the table, and a tooltip that clipped them too would
+    -- be no help at all.
+    GameTooltip:AddLine("|cff888888From|r", 1, 1, 1)
+    GameTooltip:AddLine(AuditValueText(e.old, e.field), 1, 0.5, 0.5, true)
+    GameTooltip:AddLine("|cff888888To|r", 1, 1, 1)
+    GameTooltip:AddLine(AuditValueText(e.new, e.field), 0.5, 1, 0.5, true)
+    GameTooltip:Show()
+end
+
 local function CreateAuditRow(index)
     local row = CreateFrame("Frame", nil, auditContent)
     row:SetSize(AUDIT_ROW_WIDTH, AUDIT_ROW_HEIGHT)
@@ -112,6 +150,12 @@ local function CreateAuditRow(index)
     else
         bg:SetColorTexture(0, 0, 0, 0.15)
     end
+
+    -- No column is wide enough for the longest entries, so hovering a
+    -- row shows it in full, one field per line, with nothing clipped.
+    row:EnableMouse(true)
+    row:SetScript("OnEnter", RedGuild_Audit_ShowRowTooltip)
+    row:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     row.cols = {}
     local x = 0
@@ -175,6 +219,7 @@ function UpdateAuditLog()
             auditRows[i] = row
         end
 
+        row.entry = entry
         row.cols[1]:SetText("|cff888888" .. RedGuild_Audit_ShortTime(entry.time) .. "|r")
         row.cols[2]:SetText("|cffaaaaff" .. (entry.editor or "?") .. "|r")
         row.cols[3]:SetText("|cffffffff" .. (entry.name or "?") .. "|r")
@@ -186,6 +231,7 @@ function UpdateAuditLog()
     end
 
     for i = #shown + 1, #auditRows do
+        auditRows[i].entry = nil
         auditRows[i]:Hide()
     end
 
