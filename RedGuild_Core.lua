@@ -67,9 +67,10 @@ LibDeflate   = LibStub("LibDeflate")
 
 -- Ensure inbound chunk buffers exist
 REDGUILD_Inbound = REDGUILD_Inbound or {
-    DATA      = {},
-    FORCE_REQ = {},
-	ALTS_DATA  = {},
+    DATA        = {},
+    FORCE_REQ   = {},
+	ALTS_DATA   = {},
+	ATTEND_DATA = {},
 }
 
 -- Payloads that already assembled, keyed the same way as the buckets.
@@ -615,6 +616,14 @@ local function RedGuild_GetSyncChannel(msgType, target)
         return "WHISPER", GetExactName(target)
     end
 
+    -- ATTEND_DATA never goes guild-wide: attendance is editor-only
+    -- bookkeeping, pushed by hand from the Attendance tab straight to
+    -- the other editor, so nobody else spends bandwidth carrying it.
+    if msgType == "ATTEND_DATA" then
+        if not target or target == "" then return nil, nil end
+        return "WHISPER", GetExactName(target)
+    end
+
     -- Everything else → guild
     return "GUILD", nil
 end
@@ -650,10 +659,14 @@ if RedGuild_Config.hideMeFromSync then
     -- RESEND only asks for parts of a payload this client was already
     -- sent, so opting out of broadcasting must not leave it stuck with
     -- a half-received table.
+    -- ATTEND_DATA is likewise exempt: it only ever goes out because an
+    -- editor pressed Sync on the Attendance tab, and it is not part of
+    -- the DKP broadcast this opt-out is about.
     if msgType ~= "ALTS_REQ" and
        msgType ~= "ALTS_DATA" and
        msgType ~= "RESEND" and
        msgType:sub(1, 4) ~= "BID_" and
+       msgType ~= "ATTEND_DATA" and
        msgType ~= "ALTS_UPDATE" then
         return
     end
@@ -685,7 +698,8 @@ end
 	local isChunked =
 		msgType == "DATA" or
 		msgType == "FORCE_REQ" or
-		msgType == "ALTS_DATA"
+		msgType == "ALTS_DATA" or
+		msgType == "ATTEND_DATA"
 
 	if not isChunked then
 		local msg = string.format("%s:%s:%s", REDGUILD_CHAT_PREFIX, msgType, payload)

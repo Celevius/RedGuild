@@ -3,11 +3,30 @@
 -- Smart sync payload helpers
 -----------------------------
 
+-- Fields that belong to an editor's own bookkeeping rather than to
+-- the guild's DKP, and are deliberately kept out of the DKP payload:
+-- everybody in the guild would otherwise carry them in every sync for
+-- no reason. They travel separately, editor to editor, through
+-- RedGuild_SendAttendanceSync.
+local ATTENDANCE_FIELDS = {
+    "raidsAttended", "lastAttendance", "benched", "lastBenched",
+}
+
 -- [FORCE SYNC REWRITE] DKP‑only payload
 function BuildSyncPayload()
+    local dkp = CopyTable(RedGuild_Data)  -- IMPORTANT: copy, don’t reference
+
+    for _, rec in pairs(dkp) do
+        if type(rec) == "table" then
+            for _, field in ipairs(ATTENDANCE_FIELDS) do
+                rec[field] = nil
+            end
+        end
+    end
+
     return {
         sender = UnitName("player"),
-        dkp = CopyTable(RedGuild_Data),  -- IMPORTANT: copy, don’t reference
+        dkp = dkp,
     }
 end
 
@@ -152,15 +171,11 @@ function ApplyDKPSnapshot(snapshot)
             d.balance    = tonumber(src.balance)    or 0
             d.rotated    = tonumber(src.rotated)    or 0
 
-            -- Lifetime attendance/bench tracking, not per-session
-            -- values - unlike onTime/attendance/spent they are never
-            -- wiped by a New Week reset, so a sync from a client that
-            -- predates these fields (nil in src) must keep whatever
-            -- this client already has instead of resetting it to 0.
-            d.raidsAttended  = tonumber(src.raidsAttended) or d.raidsAttended or 0
-            d.lastAttendance = src.lastAttendance or d.lastAttendance
-            d.benched        = tonumber(src.benched) or d.benched or 0
-            d.lastBenched    = src.lastBenched or d.lastBenched
+            -- Attendance/bench counters are deliberately NOT touched
+            -- here. They are editor-only bookkeeping that never rides
+            -- along with a DKP sync, so an incoming snapshot - which
+            -- no longer carries them at all - must leave this client's
+            -- own values exactly as they are.
 
             -- DKP‑table identity fields
             d.class  = src.class  or d.class
@@ -177,6 +192,126 @@ function ApplyDKPSnapshot(snapshot)
         if not seen[name] then
             RedGuild_Data[name] = nil
         end
+    end
+end
+
+--------------------------------------------------
+-- Attendance sync (editor to editor, manual)
+--------------------------------------------------
+-- Separate from the DKP sync on purpose. Attendance and bench
+-- counters are the editors' own bookkeeping, so they are pushed by
+-- hand from the Attendance tab to the other editors instead of riding
+-- along in the table every guild member receives.
+
+function BuildAttendancePayload()
+    local snapshot = {}
+
+    for name, d in pairs(RedGuild_Data) do
+        if type(name) == "string" and type(d) == "table" then
+            local raids = tonumber(d.raidsAttended) or 0
+            local bench = tonumber(d.benched) or 0
+
+            -- Only players with something actually recorded, so the
+            -- payload stays proportional to the attendance history
+            -- rather than to the size of the guild.
+            if raids > 0 or bench > 0 or d.lastAttendance or d.lastBenched then
+                snapshot[name] = {
+                    raidsAttended  = raids,
+                    lastAttendance = d.lastAttendance,
+                    benched        = bench,
+                    lastBenched    = d.lastBenched,
+                }
+            end
+        end
+    end
+
+    return { sender = UnitName("player"), attendance = snapshot }
+end
+
+-- Returns how many records were taken. Players the receiver does not
+-- already have a DKP record for are skipped rather than created: this
+-- sync carries attendance, not roster, and inventing blank DKP rows
+-- from it is exactly the sort of mess it exists to avoid.
+function ApplyAttendanceSnapshot(snapshot)
+    if type(snapshot) ~= "table" then return 0 end
+
+    local applied = 0
+    for name, src in pairs(snapshot) do
+        if type(name) == "string" and type(src) == "table" then
+            local d = RedGuild_Data[name]
+            if d then
+                d.raidsAttended  = tonumber(src.raidsAttended) or 0
+                d.lastAttendance = src.lastAttendance
+                d.benched        = tonumber(src.benched) or 0
+                d.lastBenched    = src.lastBenched
+                applied = applied + 1
+            end
+        end
+    end
+
+    return applied
+end
+
+-- Pushes this client's attendance table to every other editor who is
+-- online. Returns the number of editors it went to.
+function RedGuild_SendAttendanceSync()
+    if not IsAuthorized() then
+        Print("|cffff5555Only editors can sync attendance.|r")
+        return 0
+    end
+
+    local me      = NormalizeName(UnitName("player"))
+    local encoded = EncodePayload(BuildAttendancePayload())
+    local sent    = 0
+
+    for _, editorName in ipairs(EDITOR_PRIORITY) do
+        if NormalizeName(editorName) ~= me
+           and IsAddonUserOnlineForTooltip(editorName)
+        then
+            RedGuild_Send("ATTEND_DATA", encoded, editorName)
+            sent = sent + 1
+        end
+    end
+
+    if sent == 0 then
+        Print("|cffff5555No other editor is online - attendance not sent.|r")
+    else
+        Print("Attendance sent to " .. sent .. " editor(s).")
+    end
+
+    return sent
+end
+
+function ApplyAttendanceSync(sender, encoded)
+    sender = Ambiguate(sender or "", "short")
+    if sender == "" then return end
+
+    -- Only an editor sends this, and only an editor has any use for
+    -- it; anyone else drops it on the floor.
+    if not IsEditor(sender) then
+        D("ATTEND_DATA from non-editor " .. sender .. " - ignored")
+        return
+    end
+    if not IsAuthorized() then
+        D("ATTEND_DATA received but this client is not an editor - ignored")
+        return
+    end
+
+    local ok, payload = pcall(DecodePayload, encoded)
+    if not ok or type(payload) ~= "table" then
+        Print("|cffff5555Attendance sync from " .. sender .. " could not be read.|r")
+        return
+    end
+
+    local applied = ApplyAttendanceSnapshot(payload.attendance)
+
+    RedGuild_Config.lastAttendSync     = date("%Y-%m-%d %H:%M:%S")
+    RedGuild_Config.lastAttendSyncFrom = sender
+
+    Print("Attendance updated from " .. sender .. " (" .. applied .. " players).")
+
+    if RedGuild_RefreshAttendanceTable then
+        RedGuild_RefreshAttendanceTable()
     end
 end
 

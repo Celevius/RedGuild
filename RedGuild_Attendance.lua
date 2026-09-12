@@ -23,6 +23,7 @@ local ATTEND_COLS = {
 local attendanceRows = {}
 local attendContent
 local attendInlineEdit
+local attendStatusText
 
 -- Blank, "never" or "-" all clear the field; anything else has to be
 -- a plain YYYY-MM-DD, so a typo cannot quietly become the value that
@@ -155,7 +156,22 @@ local function CreateAttendanceRow(index)
     return row
 end
 
+function RedGuild_RefreshAttendanceStatus()
+    if not attendStatusText then return end
+
+    local when = RedGuild_Config.lastAttendSync
+    if not when then
+        attendStatusText:SetText("|cff888888Last sync: never|r")
+        return
+    end
+
+    attendStatusText:SetText(string.format("|cff888888Last sync: %s from %s|r",
+        when, RedGuild_Config.lastAttendSyncFrom or "?"))
+end
+
 function RedGuild_RefreshAttendanceTable()
+    RedGuild_RefreshAttendanceStatus()
+
     if not attendContent then return end
 
     local names = {}
@@ -207,6 +223,34 @@ function CreateAttendanceTab()
     local note = attendancePanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     note:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
     note:SetText("Counted automatically; click any value to correct it. Dates are YYYY-MM-DD.")
+
+    ----------------------------------------------------------------
+    -- SYNC (editors only, and deliberately manual)
+    ----------------------------------------------------------------
+    -- These numbers ride on their own channel rather than the DKP
+    -- sync, so they need pushing by hand once an editor is happy with
+    -- them - see RedGuild_SendAttendanceSync.
+    local syncBtn = CreateFrame("Button", nil, attendancePanel, "UIPanelButtonTemplate")
+    syncBtn:SetSize(140, 22)
+    syncBtn:SetPoint("TOPRIGHT", attendancePanel, "TOPRIGHT", -40, -32)
+    syncBtn:SetText("Sync Attendance")
+    syncBtn:SetScript("OnClick", function()
+        RedGuild_SendAttendanceSync()
+        RedGuild_RefreshAttendanceStatus()
+    end)
+    syncBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:AddLine("Sync Attendance")
+        GameTooltip:AddLine("Sends these counters to the other editors.", 1, 1, 1)
+        GameTooltip:AddLine("Attendance is not part of the DKP sync, so", 0.6, 0.6, 0.6)
+        GameTooltip:AddLine("it only moves when you press this.", 0.6, 0.6, 0.6)
+        GameTooltip:Show()
+    end)
+    syncBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    attendStatusText = attendancePanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    attendStatusText:SetPoint("TOPRIGHT", syncBtn, "BOTTOMRIGHT", 0, -4)
+    attendStatusText:SetJustifyH("RIGHT")
 
     ----------------------------------------------------------------
     -- HEADERS
