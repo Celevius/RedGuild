@@ -480,6 +480,20 @@ function RedGuild_Auction_TriggerTieRoll()
         range = AUCTION_TIE_ROLL_MAX,
     }))
 
+    -- The auctioneer never receives their own addon messages - the
+    -- CHAT_MSG_ADDON handler drops anything it sent itself - so an
+    -- auctioneer who is in the tie has to be prompted directly, the
+    -- same way BID_START and BID_REOPEN open their own prompt. It
+    -- also means the tie roll works when testing outside a group,
+    -- where there is no RAID or PARTY channel to send on at all.
+    local me = NormalizeName(UnitName("player"))
+    for _, n in ipairs(names) do
+        if NormalizeName(n) == me then
+            RedGuild_Auction_ShowTieRollPrompt(AUCTION_TIE_ROLL_MAX)
+            break
+        end
+    end
+
     AuctionWarn(string.format(
         "TIE ROLL on %s - %s, roll off now (1-%d).",
         RedGuild_Auction_ItemLabel(), table.concat(names, ", "),
