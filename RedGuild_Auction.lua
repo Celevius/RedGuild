@@ -1006,7 +1006,6 @@ function RedGuild_Auction_Award(winner, cost)
             local old = d.spent or 0
             d.spent   = old + cost
             RecalcBalance(d)
-            RedGuild_BumpAttendance(d)
 
             LogAudit(who, "spent", old, d.spent)
             LogAudit(who, "item won", "", string.format("%s (%d DKP)", link, cost))

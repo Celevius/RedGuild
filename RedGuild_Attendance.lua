@@ -3,10 +3,10 @@
 --==================================================================
 -- Kept off the DKP tab on purpose: these are lifetime counters, not
 -- part of the running DKP session, and mixing them into that table
--- made it noisy. Everything here is hand-editable - the counters are
--- maintained automatically (RedGuild_BumpAttendance /
--- RedGuild_BumpBenched), but an editor still needs to be able to
--- correct a miscount or backfill somebody the addon never saw.
+-- made it noisy. Both counters move only when a new DKP session is
+-- started (RedGuild_BumpAttendance / RedGuild_BumpBenched, from the
+-- New Week popup), so everything here is hand-editable too - an
+-- editor still needs to correct a miscount or backfill somebody.
 --==================================================================
 
 local ATTEND_ROW_HEIGHT = 18
