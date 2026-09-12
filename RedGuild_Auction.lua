@@ -421,6 +421,90 @@ function RedGuild_Auction_SortedBids()
     return list
 end
 
+-- The bidders currently tied for first place - by DKP for a real
+-- main-spec bid, by roll for anything decided by a die (off spec, or
+-- main spec's own "need" roll on a roll-only item). Empty when fewer
+-- than two people share the top spot. RedGuild never picks a winner
+-- automatically, so a tie is always left for the auctioneer to break
+-- manually via RedGuild_Auction_TriggerTieRoll.
+function RedGuild_Auction_FindTiedLeaders()
+    local list = RedGuild_Auction_SortedBids()
+
+    local candidates = {}
+    for _, b in ipairs(list) do
+        if not b.won and b.mode ~= "PASS" then
+            table.insert(candidates, b)
+        end
+    end
+    if #candidates < 2 then return {} end
+
+    local top          = candidates[1]
+    local decidedByRoll = (top.mode == "OS") or RedGuild_Auction.rollOnly
+
+    local tied = { top }
+    for i = 2, #candidates do
+        local b = candidates[i]
+        if b.mode ~= top.mode then break end
+
+        if decidedByRoll then
+            if b.roll and top.roll and b.roll == top.roll then
+                table.insert(tied, b)
+            else
+                break
+            end
+        else
+            if (b.amount or 0) == (top.amount or 0) then
+                table.insert(tied, b)
+            else
+                break
+            end
+        end
+    end
+
+    if #tied < 2 then return {} end
+    return tied
+end
+
+-- Clears the tied leaders' current roll (if any) and raid-warns them
+-- to roll again, at whatever range their tie was decided under (69
+-- for an off-spec tie, 100 for anything else - a real DKP tie
+-- included, on the usual guild "/roll 100 to break it" convention).
+-- Each tied bidder is flagged with tieRollWant so
+-- RedGuild_Auction_OnSystemMessage accepts exactly that range from
+-- them next, whatever mode or item type they were originally bidding
+-- under - the ordinary roll listener then picks up their result with
+-- no separate protocol needed.
+function RedGuild_Auction_TriggerTieRoll()
+    if not RedGuild_Auction_IsAuctioneer() then
+        AuctionPrint("Only the auctioneer running this auction can trigger a tie roll.")
+        return
+    end
+
+    local tied = RedGuild_Auction_FindTiedLeaders()
+    if #tied < 2 then
+        AuctionPrint("No tie to break right now.")
+        return
+    end
+
+    local range = (tied[1].mode == "OS") and 69 or 100
+    local names = {}
+    for _, b in ipairs(tied) do
+        table.insert(names, b.name)
+        local bid = RedGuild_Auction.bids[b.key]
+        if bid then
+            bid.roll        = nil
+            bid.rollWarned  = nil
+            bid.tieRollWant = range
+        end
+    end
+
+    AuctionWarn(string.format(
+        "TIE on %s between %s - please /roll %d again to break it.",
+        RedGuild_Auction_ItemLabel(), table.concat(names, ", "), range))
+
+    RedGuild_Auction_RefreshMaster()
+end
+
 -- Editor side. Records or replaces a bid. src is "addon" or "whisper".
 -- Once bidding has closed but the item has not yet been awarded, a
 -- bid is still accepted rather than rejected outright - it is just
@@ -1336,6 +1420,15 @@ function RedGuild_Auction_OnWhisper(text, sender)
         return false
     end
 
+    -- Bidding is a raid/group activity: a whisper from someone who
+    -- isn't actually in it has no legitimate claim on its loot.
+    if lower:match("^!bid") or lower == "!pass" or lower == "!os" then
+        if not (UnitInParty(sender) or UnitInRaid(sender)) then
+            AuctionWhisper(sender, "RedGuild: you must be in the raid or group to bid.")
+            return true
+        end
+    end
+
     ----------------------------------------------------------------
     -- !pass
     ----------------------------------------------------------------
@@ -1446,6 +1539,26 @@ function RedGuild_Auction_OnSystemMessage(text)
     if not who or not roll then return end
 
     local lowNum, highNum = tonumber(low), tonumber(high)
+    local bidderKey        = RedGuild_Auction_Bidder(who)
+    local bid              = RedGuild_Auction.bids[bidderKey]
+
+    -- A pending tie-roll (RedGuild_Auction_TriggerTieRoll) overrides
+    -- the normal mode rules: whoever is in one must roll the exact
+    -- range they were asked for, whatever kind of bid or roll got
+    -- them into the tie in the first place.
+    if bid and bid.tieRollWant then
+        if lowNum ~= 1 or highNum ~= bid.tieRollWant then
+            AuctionWhisper(who, string.format(
+                "RedGuild: this is a tie-break - please /roll %d.", bid.tieRollWant))
+            return
+        end
+
+        bid.roll        = tonumber(roll)
+        bid.rollWarned  = nil
+        bid.tieRollWant = nil
+        RedGuild_Auction_RefreshMaster()
+        return
+    end
 
     -- On a roll-only item, either a 1-100 "need" roll (mode MS) or the
     -- usual 1-69 "offspec" roll (mode OS) counts. Everywhere else,
@@ -1463,9 +1576,6 @@ function RedGuild_Auction_OnSystemMessage(text)
         return
     end
 
-    who = RedGuild_Auction_Bidder(who)
-    local bid = RedGuild_Auction.bids[who]
-
     if bid then
         -- A registered bid only accepts a roll matching the mode it
         -- was placed under - a DKP main-spec bidder is never converted
@@ -1479,12 +1589,12 @@ function RedGuild_Auction_OnSystemMessage(text)
         if bid.roll then
             if not bid.rollWarned then
                 bid.rollWarned = true
-                AuctionWhisper(who, string.format(
+                AuctionWhisper(bidderKey, string.format(
                     "RedGuild: only your first roll counts. Your %d stands, later rolls are ignored.",
                     bid.roll))
                 AuctionPrint(string.format(
                     "%s rolled again (%d) - ignored, first roll of %d stands.",
-                    who, tonumber(roll), bid.roll))
+                    bidderKey, tonumber(roll), bid.roll))
             end
             return
         end
@@ -1495,7 +1605,7 @@ function RedGuild_Auction_OnSystemMessage(text)
         -- Someone rolled without registering. Treat it as a bid under
         -- whichever mode its roll range matches, so people who just
         -- /roll are not silently dropped.
-        RedGuild_Auction_RecordBid(who, 0, expectMode, "roll", tonumber(roll))
+        RedGuild_Auction_RecordBid(bidderKey, 0, expectMode, "roll", tonumber(roll))
     end
 end
 
@@ -2055,8 +2165,25 @@ local function CreateMaster()
     f.cancelBtn:SetText("Cancel")
     f.cancelBtn:SetScript("OnClick", RedGuild_Auction_Cancel)
 
+    -- Only enabled while two or more bidders are actually tied for
+    -- first place (RedGuild_Auction_FindTiedLeaders) - see
+    -- RedGuild_Auction_TriggerTieRoll for what clicking it does.
+    f.tieBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    f.tieBtn:SetSize(72, 22)
+    f.tieBtn:SetPoint("LEFT", f.cancelBtn, "RIGHT", 6, 0)
+    f.tieBtn:SetText("Tie Roll")
+    f.tieBtn:SetScript("OnClick", RedGuild_Auction_TriggerTieRoll)
+    f.tieBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Tie Roll")
+        GameTooltip:AddLine("Clears the tied leaders' roll and asks", 1, 1, 1)
+        GameTooltip:AddLine("them to roll again to break the tie.", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    f.tieBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
     f.timerText = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    f.timerText:SetPoint("LEFT", f.cancelBtn, "RIGHT", 10, 0)
+    f.timerText:SetPoint("LEFT", f.tieBtn, "RIGHT", 10, 0)
 
     ----------------------------------------------------------------
     -- Column headers
@@ -2444,6 +2571,12 @@ function RedGuild_Auction_RefreshMaster()
         else
             f.reopenBtn:Disable()
         end
+    end
+
+    if #RedGuild_Auction_FindTiedLeaders() >= 2 then
+        f.tieBtn:Enable()
+    else
+        f.tieBtn:Disable()
     end
 
     ----------------------------------------------------------------
