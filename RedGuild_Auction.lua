@@ -339,6 +339,74 @@ local function AuctionWhisper(target, msg)
     SendChatMessage(msg, "WHISPER", nil, Ambiguate(target, "none"))
 end
 
+--------------------------------------------------
+-- EASTER EGGS
+--------------------------------------------------
+-- Whispered to whoever earned them. Each one lands at most once per
+-- person per item - the same joke eleven times in a row stops being
+-- one - but a player who rolls a 1 and later a 69 gets both, so the
+-- de-duplication is per quip rather than per person.
+AUCTION_NICE_NUMBER = REDGUILD_NICE_NUMBER or 69
+
+-- The answer to the Ultimate Question of Life, the Universe, and
+-- Everything (Adams), which people do notice when it comes up.
+local AUCTION_ANSWER_NUMBER = 42
+
+-- Picks the line for a roll, or nil for the overwhelming majority of
+-- rolls that are just numbers. Returns the quip and a stable kind,
+-- which is what the once-per-item check keys off.
+--
+-- Pure, and deliberately separate from the whispering, so the rules
+-- can be tested without a chat channel.
+function RedGuild_Auction_RollQuip(roll, low, high)
+    roll, low, high = tonumber(roll), tonumber(low), tonumber(high)
+    if not roll then return nil end
+
+    if roll == AUCTION_NICE_NUMBER then
+        return string.format("%d, nice!", AUCTION_NICE_NUMBER), "nice"
+    end
+
+    -- Checked before the max-roll line so a 1-1 roll reads as the joke
+    -- it is rather than as a triumph.
+    if low and roll == low and high and high > low then
+        return string.format("A %d. Are you even trying?", roll), "min"
+    end
+
+    if high and roll == high and low and high > low then
+        return string.format("%d. Max roll - that is the best it gets.", roll), "max"
+    end
+
+    if roll == AUCTION_ANSWER_NUMBER then
+        return string.format(
+            "%d. The answer to life, the universe, and everything.",
+            AUCTION_ANSWER_NUMBER), "answer"
+    end
+
+    return nil
+end
+
+-- Sends one, at most once per person per item.
+function RedGuild_Auction_Quip(who, msg, kind)
+    if not who or not msg then return end
+
+    RedGuild_Auction.niced = RedGuild_Auction.niced or {}
+
+    local key = NormalizeName(who)
+    if not key then return end
+
+    local seen = key .. "\001" .. tostring(kind or msg)
+    if RedGuild_Auction.niced[seen] then return end
+    RedGuild_Auction.niced[seen] = true
+
+    -- Whispering yourself goes nowhere, so the auctioneer gets it in
+    -- their own chat frame instead.
+    if key == NormalizeName(UnitName("player")) then
+        AuctionPrint(msg)
+    else
+        AuctionWhisper(who, msg)
+    end
+end
+
 local function ClassColour(name)
     local who = RedGuild_Auction_Bidder(name)
     local d = RedGuild_Data and RedGuild_Data[who]
@@ -382,6 +450,7 @@ local function AuctionResetBook()
     RedGuild_Auction.awarded     = 0
     RedGuild_Auction.qty         = 1
     RedGuild_Auction.rollOnly    = false
+    RedGuild_Auction.niced       = {}
 end
 
 -- Sorted view of the bid book: main-spec bids by DKP desc, then
@@ -569,6 +638,14 @@ function RedGuild_Auction_RecordBid(player, amount, mode, src, roll)
         late   = isLate or nil,
         at     = existing and existing.at or GetTime(),
     }
+
+    if amount == AUCTION_NICE_NUMBER then
+        RedGuild_Auction_Quip(player,
+            string.format("%d, nice!", AUCTION_NICE_NUMBER), "nice")
+    elseif amount > 0 and amount == bal then
+        RedGuild_Auction_Quip(player,
+            "That is every point you have. No pressure.", "allin")
+    end
 
     RedGuild_Auction_RefreshMaster()
     return true, isLate
@@ -1570,6 +1647,14 @@ function RedGuild_Auction_OnSystemMessage(text)
     local lowNum, highNum = tonumber(low), tonumber(high)
     local bidderKey        = RedGuild_Auction_Bidder(who)
     local bid              = RedGuild_Auction.bids[bidderKey]
+
+    -- Before any of the gating below, so a roll gets its due whatever
+    -- the range - need roll, off-spec roll, tie roll, or a roll that
+    -- counts for nothing at all.
+    local quip, quipKind = RedGuild_Auction_RollQuip(roll, lowNum, highNum)
+    if quip then
+        RedGuild_Auction_Quip(who, quip, quipKind)
+    end
 
     -- A pending tie-roll (RedGuild_Auction_TriggerTieRoll) overrides
     -- the normal mode rules: whoever is in one must roll the exact

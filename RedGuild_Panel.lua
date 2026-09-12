@@ -583,8 +583,12 @@ end
                     dkp[fieldName] = num
                     RecalcBalance(dkp)
 
-                    if num == 69 then
-                        print("|cff00ff00Nice!|r")
+                    -- Local only: the player whose number this is may
+                    -- well be offline, and a failed whisper puts a red
+                    -- error in the editor's chat for no reason.
+                    if num == (REDGUILD_NICE_NUMBER or 69) then
+                        print(string.format("|cff00ff00%d, nice!|r",
+                            REDGUILD_NICE_NUMBER or 69))
                     end
 
                     LogAudit(playerName, fieldName, old, num)

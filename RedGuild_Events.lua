@@ -563,10 +563,9 @@ do
 
                 local balance = tonumber(d.balance or 0) or 0
 
-                -- Easter egg: 69 → NICE!
                 local suffix = ""
-                if balance == 69 then
-                    suffix = "  NICE!"
+                if balance == (REDGUILD_NICE_NUMBER or 69) then
+                    suffix = " - nice!"
                 end
 
                 local reply = string.format("Your DKP: %d%s", balance, suffix)

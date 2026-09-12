@@ -366,6 +366,10 @@ end
 -- bytes, so 220 bytes of chunk data leaves a safe margin without
 -- risking truncation. Bigger than the old 200 means fewer chunks -
 -- and fewer addon messages - for every sync.
+-- Shared so the DKP table, the !dkp reply and the auction all agree
+-- on which number is worth mentioning.
+REDGUILD_NICE_NUMBER = 69
+
 REDGUILD_MAX_CHUNK = 220
 RedGuild_OutboundSeq = 0
 RedGuild_Data   = RedGuild_Data   or {}
