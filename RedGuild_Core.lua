@@ -544,7 +544,7 @@ end
 
 local function RedGuild_GetSyncChannel(msgType, target)
     -- Live bidding traffic: bidder -> auctioneer
-    if msgType == "BID_PLACE" then
+    if msgType == "BID_PLACE" or msgType == "BID_TIEPASS" then
         if not target or target == "" then return nil, nil end
         return "WHISPER", GetExactName(target)
     end

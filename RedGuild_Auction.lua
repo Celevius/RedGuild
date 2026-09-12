@@ -462,6 +462,7 @@ function RedGuild_Auction_TriggerTieRoll()
             -- bid.amount stay exactly as they were.
             bid.tieRoll       = nil
             bid.tieRollWarned = nil
+            bid.tiePassed     = nil
             bid.tieRollWant   = AUCTION_TIE_ROLL_MAX
         end
     end
@@ -1296,6 +1297,15 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
     end
 
     ----------------------------------------------------------------
+    if msgType == "BID_TIEPASS" then
+        if not RedGuild_Auction_IsAuctioneer() then return end
+        if data.id ~= RedGuild_Auction.id then return end
+
+        RedGuild_Auction_RecordTieRollPass(sender)
+        return
+    end
+
+    ----------------------------------------------------------------
     if msgType == "BID_STOP" then
         if data.id ~= RedGuild_Auction.id then return end
         RedGuild_Auction.open = false
@@ -1553,7 +1563,13 @@ function RedGuild_Auction_OnSystemMessage(text)
     -- them into the tie in the first place. The result is kept in its
     -- own field - the bid or roll that got them here is left intact,
     -- so the editor can still see both side by side.
-    if bid and bid.tieRollWant then
+    if bid and (bid.tieRollWant or bid.tiePassed) then
+        -- Someone who passed stays in this branch rather than falling
+        -- through to the normal listener below, where a later roll
+        -- could overwrite the bid or roll they are tied on. They said
+        -- no; a stray /roll afterwards does not change that.
+        if bid.tiePassed then return end
+
         if lowNum ~= 1 or highNum ~= bid.tieRollWant then
             AuctionWhisper(who, string.format(
                 "RedGuild: this is a tie-break - please /roll %d.", bid.tieRollWant))
@@ -1916,11 +1932,23 @@ local function CreateTiePrompt()
 
     f.rollBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.rollBtn:SetSize(200, 34)
-    f.rollBtn:SetPoint("BOTTOM", f, "BOTTOM", 0, 18)
+    f.rollBtn:SetPoint("BOTTOM", f, "BOTTOM", 0, 42)
     f.rollBtn:SetScript("OnClick", function(self)
         RandomRoll(1, f.range or AUCTION_TIE_ROLL_MAX)
         -- One roll each: the auctioneer keeps the first one anyway.
         self:Disable()
+        f:Hide()
+    end)
+
+    -- Bowing out of the roll-off. Their original bid is untouched
+    -- either way; this just tells the auctioneer not to wait on a
+    -- roll that is never coming.
+    f.passBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    f.passBtn:SetSize(200, 20)
+    f.passBtn:SetPoint("BOTTOM", f, "BOTTOM", 0, 16)
+    f.passBtn:SetText("|TInterface\\Buttons\\UI-GroupLoot-Pass-Up:14:14:0:0|t Pass")
+    f.passBtn:SetScript("OnClick", function()
+        RedGuild_Auction_SendTieRollPass()
         f:Hide()
     end)
 
@@ -1941,8 +1969,40 @@ function RedGuild_Auction_ShowTieRollPrompt(range)
     f.rollBtn:SetText(string.format(
         "|TInterface\\Buttons\\UI-GroupLoot-Dice-Up:18:18:0:0|t Roll 1-%d", range))
     f.rollBtn:Enable()
+    f.passBtn:Enable()
 
     f:Show()
+end
+
+-- Tells the auctioneer this player is not rolling off after all, so
+-- the bid list stops showing them as still to roll.
+function RedGuild_Auction_SendTieRollPass()
+    if not RedGuild_Auction.posted or not RedGuild_Auction.ml then return end
+
+    if RedGuild_Auction_IsAuctioneer() then
+        -- Whispering yourself goes nowhere, so record it directly.
+        RedGuild_Auction_RecordTieRollPass(Ambiguate(UnitName("player"), "short"))
+    else
+        RedGuild_Send("BID_TIEPASS", EncodePayload({
+            id = RedGuild_Auction.id,
+        }), RedGuild_Auction.ml)
+    end
+
+    AuctionPrint("You passed on the tie roll.")
+end
+
+-- Auctioneer side. Leaves the bid alone, exactly like a tie roll
+-- does - this only clears the "still waiting on them" state.
+function RedGuild_Auction_RecordTieRollPass(who)
+    local bid = who and RedGuild_Auction.bids[RedGuild_Auction_Bidder(who)]
+    if not bid then return end
+    if not bid.tieRollWant and not bid.tieRoll then return end
+
+    bid.tieRoll     = nil
+    bid.tieRollWant = nil
+    bid.tiePassed   = true
+
+    RedGuild_Auction_RefreshMaster()
 end
 
 function RedGuild_Auction_HideTieRollPrompt()
@@ -2744,6 +2804,8 @@ function RedGuild_Auction_RefreshMaster()
         -- while it is still awaited, white once it lands.
         if b.tieRoll then
             row.tieText:SetText("|cffffffff" .. b.tieRoll .. "|r")
+        elseif b.tiePassed then
+            row.tieText:SetText("|cff888888pass|r")
         elseif b.tieRollWant then
             row.tieText:SetText("|cffffff00...|r")
         else

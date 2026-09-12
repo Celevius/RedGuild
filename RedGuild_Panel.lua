@@ -236,7 +236,7 @@ dkpRows = {}
 dkpSortedNames = {}
 dkpHeaderButtons = {}
 editorRows = {}
-auditRows = {}
+-- auditRows lives in RedGuild_Audit.lua, alongside the table that owns it.
 currentSortField = "name"
 currentSortAscending = true
 
@@ -916,51 +916,6 @@ function UpdateTable()
     -- SCROLL HEIGHT
     ----------------------------------------------------------------
     dkpScrollChild:SetHeight(totalRows * rowHeight + rowHeight)
-end
-
-function UpdateAuditLog()
-    if not auditRows or not RedGuild_Audit then return end
-	
-	-- Remove entries older than 30 days
-	local cutoff = time() - (30 * 24 * 60 * 60)  -- 30 days in seconds
-
-	for i = #RedGuild_Audit, 1, -1 do
-		local entry = RedGuild_Audit[i]
-		if entry and entry.time then
-			local ts = ParseAuditTime(entry.time)
-			if ts and ts < cutoff then
-				table.remove(RedGuild_Audit, i)
-			end
-		end
-	end
-
-    table.sort(RedGuild_Audit, function(a, b)
-        if not a.time or not b.time then
-            return false
-        end
-        return ParseAuditTime(a.time) > ParseAuditTime(b.time)   -- newest first
-    end)
-
-    for i, row in ipairs(auditRows) do
-        local entry = RedGuild_Audit[i]
-
-        if entry then
-            local t  = entry.time   or "unknown"
-            local s  = entry.editor or "unknown"
-            local n  = entry.name   or "unknown"
-            local f  = entry.field  or "unknown"
-            local o  = (entry.old ~= nil) and tostring(entry.old) or "nil"
-            local nw = (entry.new ~= nil) and tostring(entry.new) or "nil"
-
-            row.text:SetText(string.format("[%s] %s changed %s's %s from %s to %s",
-                t, s, n, f, o, nw
-            ))
-
-            row:Show()
-        else
-            row:Hide()
-        end
-    end
 end
 
 -- Lists the guild's current rank 1 / rank 5 members - editor status
