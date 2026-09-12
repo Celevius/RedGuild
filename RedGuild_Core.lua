@@ -743,15 +743,16 @@ function EnsurePlayer(name)
 
     -- Create a safe, complete DKP record
     d = {
-        class      = "UNKNOWN",
-        msRole     = "UNKNOWN",
-        osRole     = "UNKNOWN",
-        lastWeek   = 0,
-        onTime     = 0,
-        attendance = 0,
-        bench      = 0,
-        spent      = 0,
-        rotated    = 0,
+        class          = "UNKNOWN",
+        msRole         = "UNKNOWN",
+        osRole         = "UNKNOWN",
+        lastWeek       = 0,
+        onTime         = 0,
+        attendance     = 0,
+        bench          = 0,
+        spent          = 0,
+        rotated        = 0,
+        raidsAttended  = 0,
     }
 
     RedGuild_Data[name] = d
@@ -772,6 +773,22 @@ end
 
 function BumpDKPVersion()
     RedGuild_Config.dkpVersion = (RedGuild_Config.dkpVersion or 0) + 1
+end
+
+-- Marks one more raid attended, editor-only visible on the DKP tab.
+-- Called wherever a player actually gets credit for being in the
+-- raid: On-Time DKP, Attendance DKP, or spending DKP on a won item.
+-- De-duplicated by calendar day, not by call site - On-Time and
+-- Attendance are normally allocated together at the end of the same
+-- raid, and an item won that night adds a third call, none of which
+-- should count as a separate raid attended.
+function RedGuild_BumpAttendance(d)
+    if not d then return end
+    local today = date("%Y-%m-%d")
+    if d.lastAttendance ~= today then
+        d.raidsAttended  = (tonumber(d.raidsAttended) or 0) + 1
+        d.lastAttendance = today
+    end
 end
 
 function PopulateGuildClasses()

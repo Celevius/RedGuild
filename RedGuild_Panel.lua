@@ -111,7 +111,7 @@ headers = {
     { text = "Spent",      width = 55  },
     { text = "Live Bal",   width = 65  },
 	{ text = "Rotated",  width = 55  },
-    { text = "",           width = 55  },
+    { text = "Attend",     width = 45  },
 }
 
 fieldMap = {
@@ -125,7 +125,7 @@ fieldMap = {
     [8] = "spent",
     [9] = "balance",
     [10] = "rotated",
-	[11] = "whisper",
+	[11] = "raidsAttended",
 }
 
 -- Class → Spec list (Blizzard internal spec names)
@@ -469,33 +469,34 @@ function CreateDKPRow()
                 end
             end)
 
-        elseif field == "whisper" then
-            col = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-            col:SetPoint("LEFT", row, "LEFT", colX + 5, 0)
-            col:SetSize(h.width - 10, 16)
-            col:SetText("Tell")
+        elseif field == "raidsAttended" then
+            -- Editors only (see UpdateTable): how many raids this
+            -- player has been credited for - onTime, attendance, or
+            -- spending DKP on a won item all count, deduplicated per
+            -- calendar day (RedGuild_BumpAttendance). The date of the
+            -- most recent one is a tooltip rather than its own column,
+            -- to fit in the same space the old Tell button used.
+            col = CreateFrame("Button", nil, row)
+            col:SetPoint("LEFT", row, "LEFT", colX, 0)
+            col:SetSize(h.width, ROW_HEIGHT)
 
-            row.tellButton = col
+            local fs = col:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            fs:SetAllPoints(col)
+            fs:SetJustifyH("LEFT")
+            col:SetFontString(fs)
 
-            col:SetScript("OnClick", function()
-                local index = row.index
-                if not index then return end
+            col:SetScript("OnEnter", function(self)
+                if not IsAuthorized() then return end
                 local player = row.name
-                if not player then return end
-                local d = RedGuild_Data[player]
+                local d = player and RedGuild_Data[player]
                 if not d then return end
-                local msg = string.format(
-                    "Your DKP: Previous=%d, OnTime=%d, PostRaid(Attend)=%d, Bench=%d, Spent=%d, CURRENTBalance=%d",
-                    d.lastWeek or 0,
-                    d.onTime or 0,
-                    d.attendance or 0,
-                    d.bench or 0,
-                    d.spent or 0,
-                    d.balance or 0
-                )
-                SendChatMessage(msg, "WHISPER", nil, player)
-                Print("Whisper sent to " .. player)
+
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:AddLine("Raids attended: " .. tostring(d.raidsAttended or 0))
+                GameTooltip:AddLine("Last attended: " .. (d.lastAttendance or "Never"), 1, 1, 1)
+                GameTooltip:Show()
             end)
+            col:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
         elseif field == "balance" then
             col = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -838,6 +839,7 @@ function UpdateTable()
 			d.spent      = d.spent      or 0
 			d.rotated    = d.rotated    or 0
 			d.balance    = d.balance    or 0
+			d.raidsAttended = d.raidsAttended or 0
 			
 			----------------------------------------------------------------
 			-- CAP LAST WEEK AT 300
@@ -885,11 +887,7 @@ function UpdateTable()
                 row.offSpecBtn:EnableMouse(not dkpLocked)
             end
 
-            if row.tellButton then
-                row.tellButton:Show()
-            end
-			
-			-- DELETE BUTTON VISIBILITY
+            -- DELETE BUTTON VISIBILITY
 			if dkpLocked or not IsEditor(UnitName("player")) then
 				row.deleteButton:Hide()
 			else
@@ -932,6 +930,13 @@ function UpdateTable()
             row.cols[8]:SetText(d.spent or 0)
             row.cols[9]:SetText(ColorizeBalance(d))
             row.cols[10]:SetText(tonumber(d.rotated) or 0)
+
+            -- Editors only - see RedGuild_BumpAttendance.
+            if IsAuthorized() then
+                row.cols[11]:SetText(tostring(tonumber(d.raidsAttended) or 0))
+            else
+                row.cols[11]:SetText("")
+            end
 
         else
             row:Hide()

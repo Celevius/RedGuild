@@ -193,6 +193,7 @@ StaticPopupDialogs["REDGUILD_ON_TIME_CHECK"] = {
 
                     d.onTime = new
                     RecalcBalance(d)
+                    RedGuild_BumpAttendance(d)
                     LogAudit(name, "onTime", old, d.onTime)
                 end
             end
@@ -226,6 +227,7 @@ StaticPopupDialogs["REDGUILD_ALLOCATE_ATTENDANCE"] = {
 
                     d.attendance = new
                     RecalcBalance(d)
+                    RedGuild_BumpAttendance(d)
                     LogAudit(name, "attendance", old, d.attendance)
                 end
             end
