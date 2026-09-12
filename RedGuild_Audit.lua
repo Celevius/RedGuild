@@ -80,8 +80,22 @@ function RedGuild_Audit_Matches(entry, filter)
     return strfind(hay, filter, 1, true) ~= nil
 end
 
-local function AuditValueText(v)
+-- Fields whose values are stored dates. The log records whatever was
+-- written, which for these is the canonical YYYY-MM-DD - shown here
+-- the same way the attendance table shows it, so the two tabs do not
+-- disagree about what a date looks like.
+local AUDIT_DATE_FIELDS = {
+    lastAttendance = true,
+    lastBenched    = true,
+}
+
+local function AuditValueText(v, field)
     if v == nil or v == "" then return "|cff666666-|r" end
+
+    if field and AUDIT_DATE_FIELDS[field] and RedGuild_Attendance_FormatDate then
+        return RedGuild_Attendance_FormatDate(v)
+    end
+
     return tostring(v)
 end
 
@@ -166,8 +180,8 @@ function UpdateAuditLog()
         row.cols[2]:SetText("|cffaaaaff" .. (entry.editor or "?") .. "|r")
         row.cols[3]:SetText("|cffffffff" .. (entry.name or "?") .. "|r")
         row.cols[4]:SetText("|cffffd100" .. RedGuild_Audit_FieldLabel(entry.field) .. "|r")
-        row.cols[5]:SetText("|cffff8080" .. AuditValueText(entry.old) .. "|r")
-        row.cols[6]:SetText("|cff80ff80" .. AuditValueText(entry.new) .. "|r")
+        row.cols[5]:SetText("|cffff8080" .. AuditValueText(entry.old, entry.field) .. "|r")
+        row.cols[6]:SetText("|cff80ff80" .. AuditValueText(entry.new, entry.field) .. "|r")
 
         row:Show()
     end

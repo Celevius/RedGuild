@@ -25,9 +25,29 @@ local attendContent
 local attendInlineEdit
 local attendStatusText
 
+-- Dates are shown and typed as DD.MM.YYYY but stored as YYYY-MM-DD.
+-- The stored form is what the day-based de-duplication in
+-- RedGuild_BumpAttendance compares against (it builds today's stamp
+-- with date("%Y-%m-%d")), what the attendance sync puts on the wire,
+-- and what sorts correctly as a plain string - so the display format
+-- stops at the edge, and nothing downstream has to care.
+function RedGuild_Attendance_FormatDate(stored)
+    if type(stored) ~= "string" then return "Never" end
+
+    local y, m, dd = stored:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
+    if not y then return stored end   -- unrecognised: show it as-is
+
+    return string.format("%s.%s.%s", dd, m, y)
+end
+
 -- Blank, "never" or "-" all clear the field; anything else has to be
--- a plain YYYY-MM-DD, so a typo cannot quietly become the value that
--- the day-based de-duplication then compares against.
+-- a full date, so a typo cannot quietly become the value that the
+-- day-based de-duplication then compares against. Returns the
+-- canonical YYYY-MM-DD form.
+--
+-- DD.MM.YYYY is what the table shows, so it is what an editor will
+-- type back. YYYY-MM-DD is still accepted: it is what the field held
+-- before this and what an editor used to typing it will reach for.
 local function ParseDateInput(text)
     text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
 
@@ -35,13 +55,22 @@ local function ParseDateInput(text)
         return true, nil
     end
 
-    local y, m, dd = text:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
+    local y, m, dd
+
+    local dd2, m2, y4 = text:match("^(%d%d)%.(%d%d)%.(%d%d%d%d)$")
+    if dd2 then
+        y, m, dd = y4, m2, dd2
+    else
+        y, m, dd = text:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
+    end
     if not y then return false end
 
-    m, dd = tonumber(m), tonumber(dd)
-    if m < 1 or m > 12 or dd < 1 or dd > 31 then return false end
+    if tonumber(m) < 1 or tonumber(m) > 12
+    or tonumber(dd) < 1 or tonumber(dd) > 31 then
+        return false
+    end
 
-    return true, text
+    return true, string.format("%s-%s-%s", y, m, dd)
 end
 
 -- kind is "count" (a whole number, floored at 0) or "date"
@@ -65,7 +94,7 @@ function RedGuild_Attendance_SetValue(playerName, field, kind, raw)
     else
         local ok, parsed = ParseDateInput(raw)
         if not ok then
-            Print("|cffff5555Dates must be YYYY-MM-DD (or empty to clear).|r")
+            Print("|cffff5555Dates must be DD.MM.YYYY (or empty to clear).|r")
             return
         end
         new = parsed
@@ -137,7 +166,10 @@ local function CreateAttendanceRow(index)
                 if c.kind == "count" then
                     attendInlineEdit:SetText(tostring(tonumber(value) or 0))
                 else
-                    attendInlineEdit:SetText(value or "")
+                    -- Pre-filled in the format the cell shows, so the
+                    -- editor edits what they were looking at.
+                    attendInlineEdit:SetText(
+                        value and RedGuild_Attendance_FormatDate(value) or "")
                 end
 
                 attendInlineEdit.saveFunc = function(text)
@@ -200,9 +232,9 @@ function RedGuild_RefreshAttendanceTable()
 
         row.cols[1]:SetText(classColor .. name .. "|r")
         row.cols[2]:SetText(tostring(tonumber(d.raidsAttended) or 0))
-        row.cols[3]:SetText(d.lastAttendance or "Never")
+        row.cols[3]:SetText(RedGuild_Attendance_FormatDate(d.lastAttendance))
         row.cols[4]:SetText(tostring(tonumber(d.benched) or 0))
-        row.cols[5]:SetText(d.lastBenched or "Never")
+        row.cols[5]:SetText(RedGuild_Attendance_FormatDate(d.lastBenched))
 
         row:Show()
     end
