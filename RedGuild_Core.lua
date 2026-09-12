@@ -766,7 +766,6 @@ function EnsurePlayer(name)
         attendance     = 0,
         bench          = 0,
         spent          = 0,
-        rotated        = 0,
         raidsAttended  = 0,
         benched        = 0,
     }

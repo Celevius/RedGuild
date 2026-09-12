@@ -12,14 +12,27 @@ local ATTENDANCE_FIELDS = {
     "raidsAttended", "lastAttendance", "benched", "lastBenched",
 }
 
+-- The DKP tab's old "Rotated" column counted the same thing the
+-- attendance tab's Benched counter does, so it is gone. Records saved
+-- before that still carry the key: drop it on the way out rather than
+-- paying for a dead field in every sync, and clear it from this
+-- client's own saved data while we are walking every record anyway.
+local DEAD_FIELDS = { "rotated" }
+
 -- [FORCE SYNC REWRITE] DKP‑only payload
 function BuildSyncPayload()
     local dkp = CopyTable(RedGuild_Data)  -- IMPORTANT: copy, don’t reference
 
-    for _, rec in pairs(dkp) do
+    for name, rec in pairs(dkp) do
         if type(rec) == "table" then
             for _, field in ipairs(ATTENDANCE_FIELDS) do
                 rec[field] = nil
+            end
+
+            local own = RedGuild_Data[name]
+            for _, field in ipairs(DEAD_FIELDS) do
+                rec[field] = nil
+                if type(own) == "table" then own[field] = nil end
             end
         end
     end
@@ -169,7 +182,6 @@ function ApplyDKPSnapshot(snapshot)
             d.bench      = tonumber(src.bench)      or 0
             d.spent      = tonumber(src.spent)      or 0
             d.balance    = tonumber(src.balance)    or 0
-            d.rotated    = tonumber(src.rotated)    or 0
 
             -- Attendance/bench counters are deliberately NOT touched
             -- here. They are editor-only bookkeeping that never rides

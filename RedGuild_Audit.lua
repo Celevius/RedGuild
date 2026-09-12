@@ -20,7 +20,6 @@ local AUDIT_FIELD_LABELS = {
     bench          = "Bench",
     spent          = "Spent",
     balance        = "Balance",
-    rotated        = "Rotated",
     msRole         = "Main Spec",
     osRole         = "Off Spec",
     name           = "Name",

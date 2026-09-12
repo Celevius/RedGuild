@@ -116,7 +116,6 @@ headers = {
     { text = "Bench",      width = 55  },
     { text = "Spent",      width = 55  },
     { text = "Live Bal",   width = 65  },
-	{ text = "Rotated",  width = 55  },
 }
 
 fieldMap = {
@@ -129,7 +128,6 @@ fieldMap = {
     [7] = "bench",
     [8] = "spent",
     [9] = "balance",
-    [10] = "rotated",
 }
 
 -- Class → Spec list (Blizzard internal spec names)
@@ -431,48 +429,6 @@ function CreateDKPRow()
                 UpdateTable()
             end)
 
-        elseif field == "rotated" then
-            col = CreateFrame("Button", nil, row)
-            col:SetPoint("LEFT", row, "LEFT", colX, 0)
-            col:SetSize(h.width, ROW_HEIGHT)
-
-            local fs = col:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            fs:SetAllPoints(col)
-            fs:SetJustifyH("LEFT")
-            col:SetFontString(fs)
-
-            col:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
-            col:GetHighlightTexture():SetAlpha(0.3)
-
-            col:SetScript("OnMouseDown", function(self, button)
-                if dkpLocked then return end
-                if not IsAuthorized() then return end
-
-                local rowIndex = row.index
-                if not rowIndex then return end
-
-                local name = row.name
-                if not name then return end
-
-                local d = RedGuild_Data[name]
-                if not d then return end
-
-                local old = tonumber(d.rotated) or 0
-                local new = old
-
-                if button == "LeftButton" then
-                    new = old + 1
-                elseif button == "RightButton" then
-                    new = math.max(0, old - 1)
-                end
-
-                if new ~= old then
-                    d.rotated = new
-                    LogAudit(name, "rotations", old, new)
-                    UpdateTable()
-                end
-            end)
-
         elseif field == "balance" then
             col = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
             col:SetPoint("LEFT", row, "LEFT", colX, 0)
@@ -746,9 +702,6 @@ function UpdateTable()
         if field == "msRole" or field == "osRole" then
             va = tostring(da[field] or "")
             vb = tostring(db[field] or "")
-        elseif field == "rotated" then
-            va = tonumber(da.rotated) or 0
-            vb = tonumber(db.rotated) or 0
         else
             va = tonumber(da[field]) or 0
             vb = tonumber(db[field]) or 0
@@ -812,7 +765,6 @@ function UpdateTable()
 			d.attendance = d.attendance or 0
 			d.bench      = d.bench      or 0
 			d.spent      = d.spent      or 0
-			d.rotated    = d.rotated    or 0
 			d.balance    = d.balance    or 0
 			
 			----------------------------------------------------------------
@@ -903,7 +855,6 @@ function UpdateTable()
             row.cols[7]:SetText(d.bench or 0)
             row.cols[8]:SetText(d.spent or 0)
             row.cols[9]:SetText(ColorizeBalance(d))
-            row.cols[10]:SetText(tonumber(d.rotated) or 0)
 
         else
             row:Hide()
