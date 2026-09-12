@@ -178,6 +178,69 @@ function RedGuild_Auction_TimeLeft()
     return math.max(0, math.ceil((RedGuild_Auction.endTime or 0) - GetTime()))
 end
 
+--------------------------------------------------
+-- Class/armor usability
+--------------------------------------------------
+-- Which armor subclass IDs (under itemClassID 4, Armor) each class can
+-- wear. IDs rather than itemSubType strings, since the latter comes
+-- back localized from GetItemInfo and would silently misbehave on a
+-- non-English client. 1=Cloth 2=Leather 3=Mail 4=Plate 6=Shields -
+-- Blizzard's own Enum.ItemArmorSubclass values, stable across clients.
+local function ArmorSet(...)
+    local s = {}
+    for _, v in ipairs({...}) do s[v] = true end
+    return s
+end
+
+local ARMOR_PROFICIENCY = {
+    WARRIOR     = ArmorSet(1, 2, 3, 4, 6),
+    PALADIN     = ArmorSet(1, 2, 3, 4, 6),
+    DEATHKNIGHT = ArmorSet(1, 2, 3, 4),
+    HUNTER      = ArmorSet(1, 2, 3),
+    SHAMAN      = ArmorSet(1, 2, 3, 6),
+    ROGUE       = ArmorSet(1, 2),
+    DRUID       = ArmorSet(1, 2),
+    PRIEST      = ArmorSet(1),
+    MAGE        = ArmorSet(1),
+    WARLOCK     = ArmorSet(1),
+}
+
+-- Only these slots are actually gated by armor-type proficiency.
+-- Notably NOT here: INVTYPE_CLOAK - back-slot items carry itemSubType
+-- "Cloth" too, but every class can wear any cloak regardless, so
+-- checking it here would wrongly flag a warrior's own cloak as
+-- unusable. Rings, necks, trinkets, weapons, and relics aren't
+-- proficiency-gated this way either, so they are left alone too.
+local ARMOR_PROFICIENCY_SLOTS = ArmorSet(
+    "INVTYPE_HEAD", "INVTYPE_SHOULDER", "INVTYPE_CHEST", "INVTYPE_ROBE",
+    "INVTYPE_WAIST", "INVTYPE_LEGS", "INVTYPE_FEET", "INVTYPE_WRIST",
+    "INVTYPE_HAND", "INVTYPE_SHIELD"
+)
+
+-- True unless the posted item is armor of a type the bidder's class
+-- cannot wear (a priest looking at plate, a mage looking at a
+-- shield). Weapon proficiency is deliberately not covered - unlike
+-- armor type, it has enough class/talent/quest exceptions that a
+-- hardcoded table would risk wrongly blocking a valid roll, which is
+-- worse than not checking at all. Fails open (usable) whenever the
+-- item info isn't cached yet or the slot isn't proficiency-gated, so
+-- this only ever narrows bidding, never blocks something it shouldn't.
+function RedGuild_Auction_ItemUsableByMe()
+    local link = RedGuild_Auction.itemLink
+    if not link then return true end
+
+    local _, _, _, _, _, _, _, _, equipLoc, _, _, classID, subClassID = GetItemInfo(link)
+    if not equipLoc then return true end
+    if not ARMOR_PROFICIENCY_SLOTS[equipLoc] then return true end
+    if classID ~= 4 then return true end
+
+    local _, classToken = UnitClass("player")
+    local allowed = ARMOR_PROFICIENCY[classToken]
+    if not allowed then return true end
+
+    return allowed[subClassID] == true
+end
+
 -- The auctioneer stamps every BID_START with the DKP version it was
 -- posted under. Anything lower locally means the balance on screen is
 -- not the one being bid against yet.
@@ -1432,6 +1495,10 @@ StaticPopupDialogs["REDGUILD_BID_CONFIRM_PASS"] = {
 local function PromptRuleText()
     local parts = {}
 
+    if not RedGuild_Auction_ItemUsableByMe() then
+        table.insert(parts, "|cffff2020This item is not usable by your class - bidding disabled.|r")
+    end
+
     if RedGuild_Auction.rollOnly then
         table.insert(parts, "|cff55ccffRoll only|r - no DKP is charged for this item.")
     end
@@ -1601,6 +1668,17 @@ local function CreatePrompt()
                 RedGuild_Auction_GetBalance(UnitName("player"))))
         end
 
+        -- Checked every tick, independent of open/closed, so a class
+        -- that simply cannot use the item never gets to Bid or Roll -
+        -- Pass is untouched either way.
+        if RedGuild_Auction_ItemUsableByMe() then
+            self.bidBtn:Enable()
+            self.osBtn:Enable()
+        else
+            self.bidBtn:Disable()
+            self.osBtn:Disable()
+        end
+
         if not RedGuild_Auction.open then
             self.timerText:SetText("|cffff5555Closed|r")
             self.ruleText:SetText(
@@ -1664,6 +1742,17 @@ function RedGuild_Auction_ShowPrompt()
         f.osBtn:ClearAllPoints()
         f.osBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -16, 44)
         f.osBtn:SetText("|TInterface\\Buttons\\UI-GroupLoot-Dice-Up:16:16:0:0|t Roll OS")
+    end
+
+    -- Set immediately rather than waiting for the first OnUpdate tick,
+    -- so a class that can't use the item never sees Bid/Roll enabled
+    -- even for a moment.
+    if RedGuild_Auction_ItemUsableByMe() then
+        f.bidBtn:Enable()
+        f.osBtn:Enable()
+    else
+        f.bidBtn:Disable()
+        f.osBtn:Disable()
     end
 
     f:Show()
