@@ -87,14 +87,15 @@ local function BuildLogEntry(winner, cost, mode, cancelled, copy)
     if RedGuild_Auction_IsAuctioneer() then
         for _, b in ipairs(RedGuild_Auction_SortedBids()) do
             table.insert(bids, {
-                name   = b.name,
-                amount = b.amount,
-                mode   = b.mode,
-                roll   = b.roll,
-                src    = b.src,
+                name    = b.name,
+                amount  = b.amount,
+                mode    = b.mode,
+                roll    = b.roll,
+                tieRoll = b.tieRoll,
+                src     = b.src,
                 -- Set on a multi-copy item once this bidder has taken
                 -- one, so the detail pane can say so.
-                won    = b.won or nil,
+                won     = b.won or nil,
             })
         end
     elseif RedGuild_Auction.myBid then
@@ -121,6 +122,7 @@ local function BuildLogEntry(winner, cost, mode, cancelled, copy)
     }
 end
 local auctionPrompt      -- bidder popup
+local auctionTiePrompt   -- tie-roll popup
 local auctionMasterRows = {}
 
 --------------------------------------------------
@@ -374,11 +376,12 @@ end
 -- copy count and roll-only flag, so a fresh auction never inherits
 -- them from the last one.
 local function AuctionResetBook()
-    RedGuild_Auction.bids     = {}
-    RedGuild_Auction.selected = nil
-    RedGuild_Auction.awarded  = 0
-    RedGuild_Auction.qty      = 1
-    RedGuild_Auction.rollOnly = false
+    RedGuild_Auction.bids        = {}
+    RedGuild_Auction.selected    = nil
+    RedGuild_Auction.tieSelected = {}
+    RedGuild_Auction.awarded     = 0
+    RedGuild_Auction.qty         = 1
+    RedGuild_Auction.rollOnly    = false
 end
 
 -- Sorted view of the bid book: main-spec bids by DKP desc, then
@@ -399,6 +402,14 @@ function RedGuild_Auction_SortedBids()
 
         local ra, rb = rank[a.mode] or 9, rank[b.mode] or 9
         if ra ~= rb then return ra < rb end
+
+        -- A tie roll is the whole point of being in one, so once both
+        -- sides have rolled it settles the order between them before
+        -- anything else does.
+        if a.tieRoll and b.tieRoll and a.tieRoll ~= b.tieRoll then
+            return a.tieRoll > b.tieRoll
+        end
+
         if a.mode == "OS" and b.mode == "OS" then
             if (a.roll or 0) ~= (b.roll or 0) then
                 return (a.roll or 0) > (b.roll or 0)
@@ -421,88 +432,60 @@ function RedGuild_Auction_SortedBids()
     return list
 end
 
--- The bidders currently tied for first place - by DKP for a real
--- main-spec bid, by roll for anything decided by a die (off spec, or
--- main spec's own "need" roll on a roll-only item). Empty when fewer
--- than two people share the top spot. RedGuild never picks a winner
--- automatically, so a tie is always left for the auctioneer to break
--- manually via RedGuild_Auction_TriggerTieRoll.
-function RedGuild_Auction_FindTiedLeaders()
-    local list = RedGuild_Auction_SortedBids()
+-- Tie rolls are picked by hand: the auctioneer ticks whoever should
+-- roll off in the bid list and presses Tie Roll. Nothing here is
+-- automatic, and nothing here disturbs the bids already on the book -
+-- a tie roll is recorded alongside the original bid or roll, never
+-- over the top of it, so the editor can still see what everybody
+-- actually bid when deciding.
+AUCTION_TIE_ROLL_MAX = 100
 
-    local candidates = {}
-    for _, b in ipairs(list) do
-        if not b.won and b.mode ~= "PASS" then
-            table.insert(candidates, b)
-        end
-    end
-    if #candidates < 2 then return {} end
-
-    local top          = candidates[1]
-    local decidedByRoll = (top.mode == "OS") or RedGuild_Auction.rollOnly
-
-    local tied = { top }
-    for i = 2, #candidates do
-        local b = candidates[i]
-        if b.mode ~= top.mode then break end
-
-        if decidedByRoll then
-            if b.roll and top.roll and b.roll == top.roll then
-                table.insert(tied, b)
-            else
-                break
-            end
-        else
-            if (b.amount or 0) == (top.amount or 0) then
-                table.insert(tied, b)
-            else
-                break
-            end
-        end
-    end
-
-    if #tied < 2 then return {} end
-    return tied
-end
-
--- Clears the tied leaders' current roll (if any) and raid-warns them
--- to roll again, at whatever range their tie was decided under (69
--- for an off-spec tie, 100 for anything else - a real DKP tie
--- included, on the usual guild "/roll 100 to break it" convention).
--- Each tied bidder is flagged with tieRollWant so
--- RedGuild_Auction_OnSystemMessage accepts exactly that range from
--- them next, whatever mode or item type they were originally bidding
--- under - the ordinary roll listener then picks up their result with
--- no separate protocol needed.
+-- Sends the selected bidders a roll prompt. Returns how many were
+-- asked, so the caller can report it.
 function RedGuild_Auction_TriggerTieRoll()
     if not RedGuild_Auction_IsAuctioneer() then
         AuctionPrint("Only the auctioneer running this auction can trigger a tie roll.")
-        return
+        return 0
+    end
+    if not RedGuild_Auction.posted then
+        AuctionPrint("No item is posted.")
+        return 0
     end
 
-    local tied = RedGuild_Auction_FindTiedLeaders()
-    if #tied < 2 then
-        AuctionPrint("No tie to break right now.")
-        return
-    end
-
-    local range = (tied[1].mode == "OS") and 69 or 100
     local names = {}
-    for _, b in ipairs(tied) do
-        table.insert(names, b.name)
-        local bid = RedGuild_Auction.bids[b.key]
+    for key, selected in pairs(RedGuild_Auction.tieSelected or {}) do
+        local bid = selected and RedGuild_Auction.bids[key]
         if bid then
-            bid.roll        = nil
-            bid.rollWarned  = nil
-            bid.tieRollWant = range
+            table.insert(names, bid.name or key)
+
+            -- Only the tie-roll fields are touched. bid.roll and
+            -- bid.amount stay exactly as they were.
+            bid.tieRoll       = nil
+            bid.tieRollWarned = nil
+            bid.tieRollWant   = AUCTION_TIE_ROLL_MAX
         end
     end
 
+    if #names < 1 then
+        AuctionPrint("Tick the bidders who should roll off first.")
+        return 0
+    end
+
+    table.sort(names)
+
+    RedGuild_Send("BID_TIEROLL", EncodePayload({
+        id    = RedGuild_Auction.id,
+        names = names,
+        range = AUCTION_TIE_ROLL_MAX,
+    }))
+
     AuctionWarn(string.format(
-        "TIE on %s between %s - please /roll %d again to break it.",
-        RedGuild_Auction_ItemLabel(), table.concat(names, ", "), range))
+        "TIE ROLL on %s - %s, roll off now (1-%d).",
+        RedGuild_Auction_ItemLabel(), table.concat(names, ", "),
+        AUCTION_TIE_ROLL_MAX))
 
     RedGuild_Auction_RefreshMaster()
+    return #names
 end
 
 -- Editor side. Records or replaces a bid. src is "addon" or "whisper".
@@ -957,6 +940,7 @@ function RedGuild_Auction_Cancel()
 
     RedGuild_Auction_RefreshMaster()
     if auctionPrompt then auctionPrompt:Hide() end
+    RedGuild_Auction_HideTieRollPrompt()
     StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
 end
 
@@ -1102,6 +1086,7 @@ function RedGuild_Auction_Award(winner, cost)
 
     RedGuild_Auction_RefreshMaster()
     if auctionPrompt then auctionPrompt:Hide() end
+    RedGuild_Auction_HideTieRollPrompt()
     StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
 
     RedGuild_Auction_PushSyncAfterClose()
@@ -1293,6 +1278,24 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
     end
 
     ----------------------------------------------------------------
+    if msgType == "BID_TIEROLL" then
+        if not IsEditor(sender) then return end
+        if data.id ~= RedGuild_Auction.id then return end
+
+        -- Sent to the whole group; only the people named in it are
+        -- being asked to roll off.
+        local me = NormalizeName(UnitName("player"))
+        for _, n in ipairs(data.names or {}) do
+            if NormalizeName(n) == me then
+                RedGuild_Auction_ShowTieRollPrompt(
+                    tonumber(data.range) or AUCTION_TIE_ROLL_MAX)
+                return
+            end
+        end
+        return
+    end
+
+    ----------------------------------------------------------------
     if msgType == "BID_STOP" then
         if data.id ~= RedGuild_Auction.id then return end
         RedGuild_Auction.open = false
@@ -1332,6 +1335,7 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
         RedGuild_Auction.posted = false
         AuctionResetBook()
         if auctionPrompt then auctionPrompt:Hide() end
+        RedGuild_Auction_HideTieRollPrompt()
         StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
         return
     end
@@ -1374,6 +1378,7 @@ function RedGuild_Auction_OnAddonMessage(msgType, payload, sender)
         RedGuild_Auction.posted = false
         AuctionResetBook()
         if auctionPrompt then auctionPrompt:Hide() end
+        RedGuild_Auction_HideTieRollPrompt()
         StaticPopup_Hide("REDGUILD_BID_CONFIRM_PASS")
         return
     end
@@ -1545,7 +1550,9 @@ function RedGuild_Auction_OnSystemMessage(text)
     -- A pending tie-roll (RedGuild_Auction_TriggerTieRoll) overrides
     -- the normal mode rules: whoever is in one must roll the exact
     -- range they were asked for, whatever kind of bid or roll got
-    -- them into the tie in the first place.
+    -- them into the tie in the first place. The result is kept in its
+    -- own field - the bid or roll that got them here is left intact,
+    -- so the editor can still see both side by side.
     if bid and bid.tieRollWant then
         if lowNum ~= 1 or highNum ~= bid.tieRollWant then
             AuctionWhisper(who, string.format(
@@ -1553,9 +1560,21 @@ function RedGuild_Auction_OnSystemMessage(text)
             return
         end
 
-        bid.roll        = tonumber(roll)
-        bid.rollWarned  = nil
-        bid.tieRollWant = nil
+        if bid.tieRoll then
+            if not bid.tieRollWarned then
+                bid.tieRollWarned = true
+                AuctionWhisper(who, string.format(
+                    "RedGuild: only your first tie roll counts. Your %d stands.",
+                    bid.tieRoll))
+            end
+            return
+        end
+
+        -- tieRollWant deliberately stays set: it is what keeps every
+        -- later roll from this player inside this branch. Clearing it
+        -- would drop them back into the normal listener below, where a
+        -- reroll could overwrite the bid they are tied on.
+        bid.tieRoll = tonumber(roll)
         RedGuild_Auction_RefreshMaster()
         return
     end
@@ -1857,6 +1876,79 @@ local function CreatePrompt()
     return f
 end
 
+--------------------------------------------------
+-- TIE ROLL PROMPT
+--------------------------------------------------
+-- Deliberately nothing but a roll button. The bid is already placed
+-- and is not being replaced - this is only the roll-off that settles
+-- who wins among people who are level on it.
+local function CreateTiePrompt()
+    if auctionTiePrompt then return auctionTiePrompt end
+
+    local f = CreateFrame("Frame", "RedGuildTieRollPrompt", UIParent,
+        "BasicFrameTemplateWithInset")
+    f:SetSize(260, 150)
+    f:SetPoint("CENTER", UIParent, "CENTER", 0, 180)
+    f:SetFrameStrata("DIALOG")
+    f:SetMovable(true)
+    f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop", f.StopMovingOrSizing)
+    f:Hide()
+    table.insert(UISpecialFrames, "RedGuildTieRollPrompt")
+
+    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    f.title:SetPoint("CENTER", f.TitleBg, "CENTER", 0, 0)
+    f.title:SetText("RedGuild - Tie Roll")
+
+    f.itemText = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    f.itemText:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -34)
+    f.itemText:SetPoint("TOPRIGHT", f, "TOPRIGHT", -16, -34)
+    f.itemText:SetJustifyH("CENTER")
+    f.itemText:SetWordWrap(true)
+
+    f.infoText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.infoText:SetPoint("TOPLEFT", f.itemText, "BOTTOMLEFT", 0, -8)
+    f.infoText:SetPoint("TOPRIGHT", f.itemText, "BOTTOMRIGHT", 0, -8)
+    f.infoText:SetJustifyH("CENTER")
+    f.infoText:SetWordWrap(true)
+
+    f.rollBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    f.rollBtn:SetSize(200, 34)
+    f.rollBtn:SetPoint("BOTTOM", f, "BOTTOM", 0, 18)
+    f.rollBtn:SetScript("OnClick", function(self)
+        RandomRoll(1, f.range or AUCTION_TIE_ROLL_MAX)
+        -- One roll each: the auctioneer keeps the first one anyway.
+        self:Disable()
+        f:Hide()
+    end)
+
+    auctionTiePrompt = f
+    return f
+end
+
+function RedGuild_Auction_ShowTieRollPrompt(range)
+    range = tonumber(range) or AUCTION_TIE_ROLL_MAX
+
+    local f = CreateTiePrompt()
+    f.range = range
+
+    f.itemText:SetText(RedGuild_Auction.itemLink
+        and RedGuild_Auction_ItemLabel() or "Unknown item")
+    f.infoText:SetText(string.format(
+        "|cffffff00Tie roll|r - roll off to settle it.\nYour bid still stands as it is."))
+    f.rollBtn:SetText(string.format(
+        "|TInterface\\Buttons\\UI-GroupLoot-Dice-Up:18:18:0:0|t Roll 1-%d", range))
+    f.rollBtn:Enable()
+
+    f:Show()
+end
+
+function RedGuild_Auction_HideTieRollPrompt()
+    if auctionTiePrompt then auctionTiePrompt:Hide() end
+end
+
 function RedGuild_Auction_ShowPrompt()
     if not RedGuild_Auction.posted then return end
 
@@ -1920,13 +2012,24 @@ end
 
 local function CreateMasterRow(index, parent)
     local row = CreateFrame("Button", nil, parent)
-    row:SetSize(400, 16)
+    row:SetSize(440, 16)
     row:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, -((index - 1) * 16))
 
     row.hl = row:CreateTexture(nil, "BACKGROUND")
     row.hl:SetAllPoints(row)
     row.hl:SetColorTexture(0.3, 0.5, 0.9, 0.35)
     row.hl:Hide()
+
+    -- Ticked to include this bidder in the next tie roll. Separate
+    -- from the row's own selection, which is what Award acts on.
+    row.tieCheck = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+    row.tieCheck:SetSize(16, 16)
+    row.tieCheck:SetPoint("LEFT", row, "LEFT", 2, 0)
+    row.tieCheck:SetScript("OnClick", function(self)
+        if not row.bidder then return end
+        RedGuild_Auction.tieSelected = RedGuild_Auction.tieSelected or {}
+        RedGuild_Auction.tieSelected[row.bidder] = self:GetChecked() and true or nil
+    end)
 
     local function mk(x, w, justify)
         local fs = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -1936,12 +2039,13 @@ local function CreateMasterRow(index, parent)
         return fs
     end
 
-    row.nameText = mk(4,   120)
-    row.bidText  = mk(128,  50, "RIGHT")
-    row.modeText = mk(186,  40)
-    row.balText  = mk(230,  50, "RIGHT")
-    row.rollText = mk(288,  40, "RIGHT")
-    row.srcText  = mk(336,  60)
+    row.nameText = mk(22,  112)
+    row.bidText  = mk(138,  45, "RIGHT")
+    row.modeText = mk(187,  36)
+    row.balText  = mk(227,  45, "RIGHT")
+    row.rollText = mk(276,  36, "RIGHT")
+    row.tieText  = mk(316,  36, "RIGHT")
+    row.srcText  = mk(356,  60)
 
     row:SetScript("OnClick", function(self)
         -- On a multi-copy item, whoever already took one is shown but
@@ -1965,7 +2069,9 @@ local function CreateMaster()
     local f = CreateFrame("Frame", "RedGuildAuctionFrame", UIParent, "BasicFrameTemplateWithInset")
     -- Taller than it was: the copies / roll-only row sits between the
     -- item link box and the auction controls.
-    f:SetSize(430, 462)
+    -- Wider than it was: the bid list gained a tie-roll tick box
+    -- and a Tie column.
+    f:SetSize(470, 462)
     f:SetPoint("CENTER", UIParent, "CENTER", 250, 0)
     f:SetFrameStrata("HIGH")
     f:SetMovable(true)
@@ -2165,9 +2271,8 @@ local function CreateMaster()
     f.cancelBtn:SetText("Cancel")
     f.cancelBtn:SetScript("OnClick", RedGuild_Auction_Cancel)
 
-    -- Only enabled while two or more bidders are actually tied for
-    -- first place (RedGuild_Auction_FindTiedLeaders) - see
-    -- RedGuild_Auction_TriggerTieRoll for what clicking it does.
+    -- Asks whoever is ticked in the bid list to roll off. See
+    -- RedGuild_Auction_TriggerTieRoll.
     f.tieBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.tieBtn:SetSize(72, 22)
     f.tieBtn:SetPoint("LEFT", f.cancelBtn, "RIGHT", 6, 0)
@@ -2176,8 +2281,9 @@ local function CreateMaster()
     f.tieBtn:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:AddLine("Tie Roll")
-        GameTooltip:AddLine("Clears the tied leaders' roll and asks", 1, 1, 1)
-        GameTooltip:AddLine("them to roll again to break the tie.", 1, 1, 1)
+        GameTooltip:AddLine("Tick the bidders who should roll off,", 1, 1, 1)
+        GameTooltip:AddLine("then press this to send them a roll button.", 1, 1, 1)
+        GameTooltip:AddLine("Their existing bid or roll is not replaced.", 0.6, 0.6, 0.6)
         GameTooltip:Show()
     end)
     f.tieBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -2190,7 +2296,7 @@ local function CreateMaster()
     ----------------------------------------------------------------
     local header = CreateFrame("Frame", nil, f)
     header:SetPoint("TOPLEFT", f.startBtn, "BOTTOMLEFT", 6, -10)
-    header:SetSize(400, 14)
+    header:SetSize(440, 14)
 
     local function hdr(x, w, text, justify)
         local fs = header:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -2200,12 +2306,13 @@ local function CreateMaster()
         fs:SetText(text)
         return fs
     end
-    hdr(4,   120, "Bidder")
-    hdr(128,  50, "Bid", "RIGHT")
-    hdr(186,  40, "Type")
-    hdr(230,  50, "Bal", "RIGHT")
-    hdr(288,  40, "Roll", "RIGHT")
-    hdr(336,  60, "Via")
+    hdr(22,  112, "Bidder")
+    hdr(138,  45, "Bid", "RIGHT")
+    hdr(187,  36, "Type")
+    hdr(227,  45, "Bal", "RIGHT")
+    hdr(276,  36, "Roll", "RIGHT")
+    hdr(316,  36, "Tie", "RIGHT")
+    hdr(356,  60, "Via")
 
     ----------------------------------------------------------------
     -- Bid list
@@ -2215,7 +2322,7 @@ local function CreateMaster()
     scroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -34, 46)
 
     local child = CreateFrame("Frame", nil, scroll)
-    child:SetSize(400, 16)
+    child:SetSize(440, 16)
     scroll:SetScrollChild(child)
     f.scrollChild = child
 
@@ -2573,7 +2680,10 @@ function RedGuild_Auction_RefreshMaster()
         end
     end
 
-    if #RedGuild_Auction_FindTiedLeaders() >= 2 then
+    -- Who rolls off is the editor's call, so this is available
+    -- whenever something is posted rather than waiting on the addon to
+    -- spot a tie for itself.
+    if RedGuild_Auction.posted then
         f.tieBtn:Enable()
     else
         f.tieBtn:Disable()
@@ -2628,6 +2738,20 @@ function RedGuild_Auction_RefreshMaster()
         end
 
         row.rollText:SetText(b.roll and tostring(b.roll) or "")
+
+        -- The tie roll sits in its own column beside the original, so
+        -- both are on screen when the editor picks the winner. Amber
+        -- while it is still awaited, white once it lands.
+        if b.tieRoll then
+            row.tieText:SetText("|cffffffff" .. b.tieRoll .. "|r")
+        elseif b.tieRollWant then
+            row.tieText:SetText("|cffffff00...|r")
+        else
+            row.tieText:SetText("")
+        end
+
+        row.tieCheck:SetChecked(
+            (RedGuild_Auction.tieSelected or {})[b.key] and true or false)
 
         -- A bid placed after bidding closed but before the item was
         -- awarded is still recorded, but the "Via" column flags it
