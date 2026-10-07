@@ -1,26 +1,3 @@
-3.1.69 Changelog
--------------------------------------------------------
-Added features:
-* Redesign of DKP Logs
-* Restrict Bid/Roll option for Classes that can't use items
-* Roll for MS/OS instead of only one roll
-* Attendance Logging
-
-3.0.69 Changelog
--------------------------------------------------------
-Added features:
-* Full resdesign of LUA structure into multiple files
-* Editors now hard coded rather than input list
-* New tickbox to control if bidding forces syncs
-* Various tweaks to the Bidding window/system
-
-Bugs squashed:
-* Sync on load now seems to work
-* Sync packets increased to max size to lower the chunk amounts (to 10)
-* Removed force sync at start of bidding to prevent sync storm
-
-
-
 2.2.69 Changelog
 -------------------------------------------------------
 Added features:
