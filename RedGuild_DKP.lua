@@ -169,6 +169,43 @@ showMeChk:SetScript("OnClick", function(self)
     UpdateTable()
 end)
 
+----------------------------------------------------------------
+-- HIDE ALTS / HIDE ARCHIVED (all users, remembered per client)
+----------------------------------------------------------------
+-- View filters only: they never change or sync any data. Both are
+-- on unless the player has unticked them (nil counts as on).
+local function MakeHideCheckbox(x, label, configKey, tip)
+    local chk = CreateFrame("CheckButton", nil, dkpPanel, "ChatConfigCheckButtonTemplate")
+    chk:SetPoint("TOPLEFT", dkpPanel, "TOPLEFT", x, -30)
+    chk:SetSize(18, 18)
+    chk:SetChecked(RedGuild_Config[configKey] ~= false)
+
+    local fs = dkpPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    fs:SetPoint("LEFT", chk, "RIGHT", 4, 0)
+    fs:SetText(label)
+
+    chk:SetScript("OnClick", function(self)
+        RedGuild_Config[configKey] = self:GetChecked() and true or false
+        UpdateTable()
+    end)
+    chk:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine(label)
+        GameTooltip:AddLine(tip, 1, 1, 1, true)
+        GameTooltip:AddLine("Only changes what you see. Your own row and players in your group are always shown.", 0.6, 0.6, 0.6, true)
+        GameTooltip:Show()
+    end)
+    chk:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    chk.configKey = configKey   -- UpdateTable keeps the tick in step
+    return chk
+end
+
+dkpPanel.hideAltsChk = MakeHideCheckbox(400, "Hide alts", "dkpHideAlts",
+    "Hides characters linked as an alt in the Alt Tracker (shown with ~).")
+dkpPanel.hideArchivedChk = MakeHideCheckbox(480, "Hide archived", "dkpHideArchived",
+    "Hides players an editor archived for inactivity. Archived rows show in grey when visible.")
+
 ----------------------------------
 -- DKP TABLE SCROLL
 ----------------------------------

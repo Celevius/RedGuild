@@ -630,8 +630,26 @@ function UpdateTable()
     ----------------------------------------------------------------
     local filtered = {}
 
+    -- Hide archived / hide alts. View only: nothing in the data
+    -- changes. Your own row always stays, and the group filter below
+    -- starts from the full list so a raid member is never hidden.
+    local hideArchived = RedGuild_Config.dkpHideArchived ~= false
+    local hideAlts     = RedGuild_Config.dkpHideAlts     ~= false
+    local meName       = Ambiguate(UnitName("player") or "", "short")
+
+    if dkpPanel and dkpPanel.hideAltsChk then
+        dkpPanel.hideAltsChk:SetChecked(hideAlts)
+        dkpPanel.hideArchivedChk:SetChecked(hideArchived)
+    end
+
     for _, name in ipairs(allNames) do
-        table.insert(filtered, name)
+        local hide = name ~= meName and (
+               (hideArchived and RedGuild_IsArchived(name))
+            or (hideAlts     and RedGuild_IsAltRecord(name)))
+
+        if not hide then
+            table.insert(filtered, name)
+        end
     end
 
     ----------------------------------------------------------------
@@ -652,7 +670,8 @@ function UpdateTable()
             local me = Ambiguate(UnitName("player"), "short")
             filtered = { me }
         else
-            for _, name in ipairs(filtered) do
+            local source = dkpShowOnlyMe and filtered or allNames
+            for _, name in ipairs(source) do
                 local inGroup = false
 
                 if IsInRaid() then
@@ -852,6 +871,12 @@ function UpdateTable()
             -- NOT IN GUILD MARKER
             if not IsNameInGuild(name) then
                 displayName = "-" .. displayName
+            end
+
+            -- ARCHIVED: greyed out (only seen with "Hide archived" off,
+            -- in a group view, or on your own row)
+            if d.archived == true then
+                classColor = "|cff808080"
             end
 
             row.cols[1].fs:SetText(classColor .. displayName .. "|r")

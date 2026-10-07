@@ -1,3 +1,13 @@
+3.2.69 Changelog
+-------------------------------------------------------
+Added features:
+* Attendance tab can be sorted by clicking a column header (Last Raid, Last Benched, Raids, Benched, Status, Name). Click again to reverse
+* New Status column on the Attendance tab (Active / Archived), editors click it to archive or reactivate a player
+* New "Archive Inactive" button on the Attendance tab. Lists every main with no raid or bench in the last 30 days, editor unticks anyone who should stay and confirms. DKP is kept, every change is in the Audit Log
+* Archived players become active again automatically when they next attend or get benched
+* New "Hide alts" and "Hide archived" tickboxes on the DKP tab (on by default, remembered per player). Your own row and your group/raid members are always shown. Archived rows show in grey when visible
+* Archive flag travels with the normal DKP sync
+
 2.2.69 Changelog
 -------------------------------------------------------
 Added features:

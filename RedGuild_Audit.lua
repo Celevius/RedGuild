@@ -27,6 +27,7 @@ local AUDIT_FIELD_LABELS = {
     lastAttendance = "Last Raid",
     benched        = "Benched",
     lastBenched    = "Last Benched",
+    archived       = "Archived",
 }
 
 -- Sized to fill the panel rather than to the longest plausible value:

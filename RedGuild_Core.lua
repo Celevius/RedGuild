@@ -12,7 +12,7 @@ RedGuild_Usage  	= RedGuild_Usage  or {}
 
 addonName      = ...
 
-REDGUILD_VERSION = "3.1.69"
+REDGUILD_VERSION = "3.2.69"
 
 REDGUILD_CHAT_PREFIX = "REDGUILD"
 
@@ -813,6 +813,9 @@ function RedGuild_BumpAttendance(d)
         d.raidsAttended  = (tonumber(d.raidsAttended) or 0) + 1
         d.lastAttendance = today
     end
+    -- Somebody who turns up again is no longer inactive. The caller
+    -- bumps the DKP version, so this reaches everyone with the sync.
+    d.archived = nil
 end
 
 -- The bench equivalent, triggered the same way and for the same
@@ -825,6 +828,128 @@ function RedGuild_BumpBenched(d)
         d.benched     = (tonumber(d.benched) or 0) + 1
         d.lastBenched = today
     end
+    d.archived = nil   -- back in the roster, see RedGuild_BumpAttendance
+end
+
+--------------------------------------------------
+-- Archive (inactive players) and alt helpers
+--------------------------------------------------
+-- An archived player keeps every DKP field untouched; the flag only
+-- decides whether the DKP table shows the row while "Hide archived" is
+-- ticked. It rides along in the normal DKP sync (BuildSyncPayload
+-- sends it as an explicit true/false so an unarchive propagates too).
+
+REDGUILD_ARCHIVE_DAYS = 30
+
+function RedGuild_IsArchived(name)
+    local d = name and RedGuild_Data[name]
+    return type(d) == "table" and d.archived == true
+end
+
+-- Same test the DKP table already uses for its "~" alt marker.
+function RedGuild_IsAltRecord(name)
+    local parent = name and RedGuild_AltParent and RedGuild_AltParent[name]
+    return parent ~= nil and parent ~= name
+end
+
+-- The most recent of Last Raid and Last Benched, as stored
+-- (YYYY-MM-DD, so a plain string compare picks the later one).
+-- Sitting on the bench still counts as turning up. nil = never.
+function RedGuild_LastSeenDate(d)
+    if type(d) ~= "table" then return nil end
+    local a, b = d.lastAttendance, d.lastBenched
+    if type(a) ~= "string" then a = nil end
+    if type(b) ~= "string" then b = nil end
+    if a and b then return (a > b) and a or b end
+    return a or b
+end
+
+-- Whole days between a stored YYYY-MM-DD date and today, or nil for
+-- a missing or unreadable date. Noon on both sides keeps daylight
+-- saving changes from shifting the count by one.
+function RedGuild_DaysSince(stored, now)
+    if type(stored) ~= "string" then return nil end
+    local y, m, dd = stored:match("^(%d%d%d%d)%-(%d%d)%-(%d%d)$")
+    if not y then return nil end
+
+    local then_ = time({ year = tonumber(y), month = tonumber(m),
+                         day = tonumber(dd), hour = 12 })
+    local t = date("*t", now or time())
+    local today = time({ year = t.year, month = t.month, day = t.day, hour = 12 })
+
+    return math.floor((today - then_) / 86400 + 0.5)
+end
+
+-- Players to offer for archiving: not archived yet, not an alt (alts
+-- never attend in their own name and have their own filter), and no
+-- raid or bench in the last REDGUILD_ARCHIVE_DAYS days, or never.
+-- Returns a list of { name, lastSeen, days } sorted longest absent
+-- first, then by name.
+function RedGuild_GetArchiveCandidates(days, now)
+    days = days or REDGUILD_ARCHIVE_DAYS
+    local list = {}
+
+    for name, d in pairs(RedGuild_Data) do
+        if type(name) == "string" and type(d) == "table"
+           and strtrim(name) ~= ""
+           and d.archived ~= true
+           and not RedGuild_IsAltRecord(name)
+        then
+            local seen = RedGuild_LastSeenDate(d)
+            local ago  = RedGuild_DaysSince(seen, now)
+            if ago == nil or ago >= days then
+                table.insert(list, { name = name, lastSeen = seen, days = ago })
+            end
+        end
+    end
+
+    table.sort(list, function(a, b)
+        local da, db = a.days or math.huge, b.days or math.huge
+        if da ~= db then return da > db end
+        return a.name < b.name
+    end)
+
+    return list
+end
+
+-- Sets or clears the archive flag on one record. Returns true if it
+-- changed. Logs the change; the caller bumps the DKP version (once,
+-- for a batch) and refreshes whatever it is showing.
+function RedGuild_SetArchived(name, archived)
+    local d = name and RedGuild_Data[name]
+    if type(d) ~= "table" then return false end
+
+    archived = archived and true or nil
+    if d.archived == archived then return false end
+
+    d.archived = archived
+    LogAudit(name, "archived", archived and "No" or "Yes", archived and "Yes" or "No")
+    return true
+end
+
+-- Archives the given names in one go. Editors only. Returns the count.
+function RedGuild_ArchivePlayers(names)
+    if not IsAuthorized() then
+        Print("|cffff5555Only editors can archive players.|r")
+        return 0
+    end
+
+    local count = 0
+    for _, name in ipairs(names or {}) do
+        if RedGuild_SetArchived(name, true) then
+            count = count + 1
+        end
+    end
+
+    if count > 0 then
+        BumpDKPVersion()
+        if UpdateTable and dkpScroll then UpdateTable() end
+        if RedGuild_RefreshAttendanceTable then RedGuild_RefreshAttendanceTable() end
+        Print(string.format("Archived %d player(s). Their DKP is kept; "
+            .. "sync the DKP table so everybody sees it.", count))
+    end
+
+    return count
 end
 
 function PopulateGuildClasses()

@@ -29,6 +29,11 @@ function BuildSyncPayload()
                 rec[field] = nil
             end
 
+            -- Always explicit on the wire: a receiver treats a missing
+            -- field as "no information" (see ApplyDKPSnapshot), so an
+            -- unarchive sent as nil would never reach anyone.
+            rec.archived = (rec.archived == true)
+
             local own = RedGuild_Data[name]
             for _, field in ipairs(DEAD_FIELDS) do
                 rec[field] = nil
@@ -223,6 +228,12 @@ function ApplyDKPSnapshot(snapshot)
             d.class  = src.class  or d.class
             d.msRole = src.msRole or d.msRole
             d.osRole = src.osRole or d.osRole
+
+            -- Archive flag. Senders older than this feature do not
+            -- send it at all, and that keeps what we had (rule 1).
+            if src.archived ~= nil then
+                d.archived = (src.archived == true) or nil
+            end
 
             RecalcBalance(d)
             seen[name] = true
